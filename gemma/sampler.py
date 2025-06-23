@@ -5,7 +5,6 @@ from flax import nnx
 import jax
 import jax.numpy as jnp
 import sentencepiece as spm
-from collections.abc import Sequence
 
 
 def _compute_attention_masks(time_step, seq_len, input_mask):
@@ -32,9 +31,9 @@ class _SamplingState:
 
 
 class Sampler:
-  def __init__(self, transformer, vocab, cache_size=1024):
+  def __init__(self, transformer, vocab, max_seq_len=1024):
     self.vocab = vocab
-    self.cache_size = cache_size
+    self.max_seq_len = max_seq_len
     self.transformer = transformer
     self.transformer_graphdef = nnx.graphdef(transformer)
 
@@ -45,7 +44,7 @@ class Sampler:
     last_token = state.token_buffer[:, state.decoding_step, None] # [B, 1]
     step_positions = state.positions[:, state.decoding_step, None] # [B, 1]
     input_mask = state.token_buffer == self.vocab.pad_id() # [B, T]
-    attention_mask = _compute_attention_masks(state.decoding_step, self.cache_size, input_mask) # [B, 1, T]
+    attention_mask = _compute_attention_masks(state.decoding_step, self.max_seq_len, input_mask) # [B, 1, T]
     transformer = nnx.merge(self.transformer_graphdef, params)
     logits, cache = transformer(last_token, step_positions, attention_mask, state.cache) # [B, 1, V]
 
@@ -70,11 +69,11 @@ class Sampler:
         done=done,
     )
 
-  def init_sample_state(self, all_input_ids: list[jax.Array], max_seq_len: int,):
+  def init_sample_state(self, all_input_ids: list[jax.Array]):
     """Initializes the sampling state given input prompts."""
     B = len(all_input_ids)
     num_input_tokens = jnp.array([len(ids) for ids in all_input_ids], dtype=jnp.int32)
-    token_buffer = jnp.full((B, max_seq_len), self.vocab.pad_id(), dtype=jnp.int32)
+    token_buffer = jnp.full((B, self.max_seq_len), self.vocab.pad_id(), dtype=jnp.int32)
     input_mask = jnp.ones_like(token_buffer, dtype=jnp.bool_)
     for i, (input_ids, num_tokens) in enumerate(zip(all_input_ids, num_input_tokens)):
       token_buffer = token_buffer.at[i, :num_tokens].set(input_ids)
@@ -87,7 +86,7 @@ class Sampler:
         num_input_tokens=num_input_tokens,
         token_buffer=token_buffer,
         positions=positions,
-        cache=self.transformer.init_cache(self.cache_size, B),
+        cache=self.transformer.init_cache(self.max_seq_len, B),
         done=jnp.zeros((B,), dtype=jnp.bool_),
     )
 
@@ -96,16 +95,16 @@ class Sampler:
     input_ids = jnp.array([self.vocab.bos_id()] + input_ids, dtype=jnp.int32)
     return input_ids
 
-  def __call__(self, input_strings: Sequence[str], max_seq_len: int):
+  def __call__(self, input_strings):
     # tokenize inputs
     all_input_ids = [self.tokenize(x) for x in input_strings]
 
     # sample tokens
     max_input_length = max(len(input_ids) for input_ids in all_input_ids)
-    state = self.init_sample_state(all_input_ids, max_seq_len)
+    state = self.init_sample_state(all_input_ids)
     params = nnx.state(self.transformer) # we pass params to _sample_step, to avoid compiling them
     step_fn = lambda state: self._sample_step(params, state)
-    cond_fn = lambda state: (state.decoding_step < max_seq_len) & jnp.any(~state.done)
+    cond_fn = lambda state: (state.decoding_step < self.max_seq_len) & jnp.any(~state.done)
     state = jax.lax.while_loop(cond_fn, step_fn, state)
 
     # convert tokens to text
