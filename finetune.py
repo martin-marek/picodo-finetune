@@ -32,7 +32,6 @@ with timing.context('load tokenizer'):
 with timing.context('sampling'):
     sampler = gemma_sampler.Sampler(transformer=model, vocab=vocab)
     input_batch = ["Say 'Hi!':", "Write a Python program that prints 'Hello World!':"]
-    out_text = sampler(input_strings=input_batch, max_seq_len=20)
+    out_text = sampler(input_strings=input_batch, max_seq_len=100)
     for input_string, out_string in zip(input_batch, out_text):
-        print(f"Prompt:\n{input_string}\nOutput:\n{out_string}")
-        print(10*'#')
+        print(f"Prompt:\n{input_string}\nOutput:\n{out_string}\n{10*'*'}")
