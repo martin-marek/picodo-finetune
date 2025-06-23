@@ -108,26 +108,23 @@ class Transformer(nnx.Module):
 
   def __call__(
       self,
-      tokens,  # [B, T]
-      positions,  # [B, T]
-      attention_mask,  # [B, T, T']
-      cache = None,  # [T']
+      tokens, # [B, T]
+      kv_cache = None, # [S]
   ):
     x = self.embedder.encode(tokens) # [B, T, D]
 
     for i, layer in enumerate(self.layers):
-      layer_cache = cache[f'layer_{i}'] if cache else None
-      layer_cache, x = layer(x, positions, attention_mask, layer_cache) # [B, T, D]
-      cache[f'layer_{i}'] = layer_cache
+      x, kv_cache[i] = layer(x, kv_cache.get(i)) # [B, T, D]
 
     x = self.final_norm(x)
     logits = self.embedder.decode(x) # [B, T, V]
 
-    return logits, cache
+    return logits, kv_cache
 
 
-  def init_cache(self, cache_size, batch_size):
-    return {
-        f'layer_{i}': layer.attn.init_cache(cache_size, batch_size)
+  def init_kv_cache(self, batch_size, max_seq_len):
+    kv_cache = {
+        i: layer.attn.init_kv_cache(batch_size, max_seq_len)
         for i, layer in enumerate(self.layers)
     }
+    return kv_cache
