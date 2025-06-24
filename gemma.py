@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 from jax.sharding import PartitionSpec as P, NamedSharding
-from .rope import apply_rope
+from rope import apply_rope
 
 
 # helpers
