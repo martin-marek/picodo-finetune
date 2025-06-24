@@ -1,21 +1,33 @@
-"""based on https://github.com/google/flax/tree/main/examples/gemma"""
-
 import jax
 import jax.numpy as jnp
 from flax import nnx
+import kagglehub
+import sentencepiece as spm
 import orbax.checkpoint as ocp
 from jax.sharding import PartitionSpec as P, NamedSharding
 from . import transformer
+
 
 # helpers
 flatten_path = lambda path: jax.tree_util.keystr(path, simple=True, separator='/')
 flatten_tree = lambda tree: {flatten_path(path):v for path, v in jax.tree.leaves_with_path(tree)}
 print_tree = lambda tree: jax.tree.map_with_path(lambda path, v: print(f'{flatten_path(path)}: {v.shape}'), tree)
 
-def load_pretrained(model_name, ckpt_path, mesh):
+
+def load_pretrained(model_variant, mesh):
+
+    # download weights
+    weights_dir = kagglehub.model_download(f'google/gemma-3/flax/{model_variant}')
+    ckpt_path = f'{weights_dir}/{model_variant}'
+    vocab_path = f'{weights_dir}/tokenizer.model'
+
+    # load tokenizer
+    vocab = spm.SentencePieceProcessor()
+    vocab.Load(vocab_path)
 
     # load abstract model
-    model_config = getattr(transformer.TransformerConfig, model_name)()
+    model_architecture = '_'.join(model_variant.split('-')[:2])
+    model_config = getattr(transformer.TransformerConfig, model_architecture)()
     model = nnx.eval_shape(lambda: transformer.Transformer(model_config, rngs=nnx.Rngs(0)))
     model_state = nnx.state(model)
 
@@ -67,4 +79,4 @@ def load_pretrained(model_name, ckpt_path, mesh):
     model_state = jax.tree.map_with_path(get_weights, model_state)
     nnx.update(model, model_state)
 
-    return model
+    return model, vocab
