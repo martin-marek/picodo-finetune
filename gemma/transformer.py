@@ -110,15 +110,17 @@ class Transformer(nnx.Module):
   def __call__(
       self,
       tokens, # [B, T]
-      kv_cache = None, # [S]
+      kv_cache = {}, # [S]
   ):
     x = self.embedder.encode(tokens) # [B, T, D]
+    x = jax.lax.with_sharding_constraint(x, P('data', None, 'model'))
 
     for i, layer in enumerate(self.layers):
       x, kv_cache[i] = layer(x, kv_cache.get(i)) # [B, T, D]
 
     x = self.final_norm(x)
     logits = self.embedder.decode(x) # [B, T, V]
+    logits = jax.lax.with_sharding_constraint(logits, P('data', None, 'model'))
 
     return logits, kv_cache
 
@@ -173,7 +175,7 @@ class Attention(nnx.Module):
 
   def __call__(self,
     x, # [B, T, D]
-    kv_cache=None # [B, S]
+    kv_cache = None # [B, S]
   ):
     B, T, D = x.shape
     N, D, H = self.q_einsum.kernel.value.shape
@@ -190,7 +192,7 @@ class Attention(nnx.Module):
 
     # get token indices
     if kv_cache is None: # training
-      positions = jnp.arange(T)[None, :].repeat([B, 1]) # [B, S]
+      positions = jnp.broadcast_to(jnp.arange(T)[None, :], [B, S])
     else: # sampling
       positions = jnp.full([B, 1], kv_cache['end_idx']) # [B, 1]
 
@@ -230,11 +232,12 @@ class Attention(nnx.Module):
 
   def init_kv_cache(self, batch_size, max_seq_len):
     mesh = self.kv_einsum.kernel.value.sharding.mesh
+    dtype = self.kv_einsum.kernel.value.dtype
     _, num_kv_heads, _, head_dim = self.kv_einsum.kernel.value.shape
     sharding = NamedSharding(mesh, P('data', None, 'model', None))
     kv_cache = {
-        'k': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=jnp.float32, device=sharding),
-        'v': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=jnp.float32, device=sharding),
+        'k': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=dtype, device=sharding),
+        'v': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=dtype, device=sharding),
         'end_idx': jnp.array(0, dtype=jnp.int32),
     }
     return kv_cache
