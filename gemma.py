@@ -11,7 +11,7 @@ from rope import apply_rope
 
 
 @dataclasses.dataclass(frozen=True)
-class TransformerConfig:
+class GemmaConfig:
     """Configuration for the gemma transformer."""
     num_layers: int
     embed_dim: int
@@ -86,10 +86,10 @@ class TransformerConfig:
         )
 
 
-class Transformer(nnx.Module):
+class Gemma(nnx.Module):
     """Gemma transformer."""
 
-    def __init__(self, config: TransformerConfig, rngs: nnx.Rngs):
+    def __init__(self, config: GemmaConfig, rngs: nnx.Rngs):
         self.embedder = Embedder(config.num_embed, config.embed_dim, rngs=rngs)
         self.layers = [
             Block(
@@ -242,7 +242,7 @@ class Attention(nnx.Module):
         return kv_cache
 
 
-class FeedForward(nnx.Module):
+class MLP(nnx.Module):
     """Feed forward module."""
 
     def __init__(self, embed_dim, hidden_dim, rngs):
@@ -278,7 +278,7 @@ class Block(nnx.Module):
             rope_base_frequency=rope_base_frequency, rope_scale_factor=rope_scale_factor,
             sliding_window_size=sliding_window_size, rngs=rngs,
         )
-        self.mlp = FeedForward(embed_dim, hidden_dim, rngs=rngs)
+        self.mlp = MLP(embed_dim, hidden_dim, rngs=rngs)
         self.pre_attention_norm = nnx.RMSNorm(embed_dim, rngs=rngs)
         self.post_attention_norm = nnx.RMSNorm(embed_dim, rngs=rngs)
         self.pre_ffw_norm = nnx.RMSNorm(embed_dim, rngs=rngs)
@@ -286,13 +286,13 @@ class Block(nnx.Module):
 
     def __call__(self, x, kv_cache=None):
 
-        # Attention.
+        # attention
         attn_inputs = self.pre_attention_norm(x)
         attn_output, kv_cache = self.attn(attn_inputs, kv_cache)
         attn_output = self.post_attention_norm(attn_output)
         x += attn_output
 
-        # Feed forward.
+        # MLP
         ffw_inputs = self.pre_ffw_norm(x)
         ffw_outputs = self.mlp(ffw_inputs)
         ffw_outputs = self.post_ffw_norm(ffw_outputs)
@@ -321,8 +321,8 @@ def load_pretrained(model_variant, mesh):
 
     # load abstract model
     model_architecture = '_'.join(model_variant.split('-')[:2])
-    model_config = getattr(TransformerConfig, model_architecture)()
-    model = nnx.eval_shape(lambda: Transformer(model_config, rngs=nnx.Rngs(0)))
+    model_config = getattr(GemmaConfig, model_architecture)()
+    model = nnx.eval_shape(lambda: Gemma(model_config, rngs=nnx.Rngs(0)))
     model_state = nnx.state(model)
 
     # load checkpoint metadata
