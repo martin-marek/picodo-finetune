@@ -10,12 +10,6 @@ from jax.sharding import PartitionSpec as P, NamedSharding
 from rope import apply_rope
 
 
-# helpers
-flatten_path = lambda path: jax.tree_util.keystr(path, simple=True, separator='/')
-flatten_tree = lambda tree: {flatten_path(path):v for path, v in jax.tree.leaves_with_path(tree)}
-print_tree = lambda tree: jax.tree.map_with_path(lambda path, v: print(f'{flatten_path(path)}: {v.shape}'), tree)
-
-
 @dataclasses.dataclass(frozen=True)
 class TransformerConfig:
     """Configuration for the gemma transformer."""
@@ -312,6 +306,10 @@ def load_pretrained(model_variant, mesh):
     import sentencepiece as spm
     import orbax.checkpoint as ocp
 
+    # helpers
+    flatten_path = lambda path: jax.tree_util.keystr(path, simple=True, separator='/')
+    flatten_tree = lambda tree: {flatten_path(path):v for path, v in jax.tree.leaves_with_path(tree)}
+
     # download weights
     weights_dir = kagglehub.model_download(f'google/gemma-3/flax/{model_variant}')
     ckpt_path = f'{weights_dir}/{model_variant}'
@@ -350,12 +348,9 @@ def load_pretrained(model_variant, mesh):
     # load checkpoint weights, then flatten the checkpoint keys
     checkpoint = checkpointer.restore(ckpt_path, checkpoint)
     checkpoint = flatten_tree(checkpoint)
-    # for k, v in checkpoint.items():
-    #     print(k, v.dtype, type(v))
 
     # transfer weights to model, mapping model layer keys to checkpoint keys
     def get_weights(path, v):
-        """maps layer keys from new flax.nnx format to old flax.linen format"""
         val_fn = lambda x: x
         key = flatten_path(path)
         key = f'transformer/{key}'
