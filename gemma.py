@@ -20,7 +20,7 @@ class GemmaConfig:
     head_dim: int
     num_kv_heads: int
     query_pre_attn_scalar: float
-    num_embed: int = 262_144
+    vocab_size: int = 262_144
     local_base_frequency: int = 10_000
     global_base_frequency: int = 1_000_000
     local_scale_factor: float = 1.0
@@ -90,7 +90,8 @@ class Gemma(nnx.Module):
     """Gemma transformer."""
 
     def __init__(self, config: GemmaConfig, rngs: nnx.Rngs):
-        self.embedder = Embedder(config.num_embed, config.embed_dim, rngs=rngs)
+        # self.embedder = Embedder(config.vocab_size, config.embed_dim, rngs=rngs)
+        self.embedder = nnx.Embed(config.vocab_size, config.embed_dim, rngs=rngs)
         self.layers = [
             Block(
                 num_heads=config.num_heads,
@@ -112,14 +113,15 @@ class Gemma(nnx.Module):
         tokens, # [B, T]
         kv_cache = {}, # [S]
     ):
-        x = self.embedder.encode(tokens) # [B, T, D]
+        V, D = self.embedder.embedding.value.shape
+        x = self.embedder(tokens) * jnp.sqrt(D) # [B, T, D]
         x = jax.lax.with_sharding_constraint(x, P('data', None, 'model'))
 
         for i, layer in enumerate(self.layers):
             x, kv_cache[i] = layer(x, kv_cache.get(i)) # [B, T, D]
 
         x = self.final_norm(x)
-        logits = self.embedder.decode(x) # [B, T, V]
+        logits = jnp.dot(x, self.embedder.embedding.value.T) # [B, T, V]
         logits = jax.lax.with_sharding_constraint(logits, P('data', None, 'model'))
 
         return logits, kv_cache
@@ -131,21 +133,6 @@ class Gemma(nnx.Module):
             for i, layer in enumerate(self.layers)
         }
         return kv_cache
-
-
-class Embedder(nnx.Module):
-    """Embedder module."""
-
-    def __init__(self, vocab_size, embed_dim, rngs):
-        self.input_embedding = nnx.Param(jax.nn.initializers.normal()(rngs.params(), (vocab_size, embed_dim)))
-
-    def encode(self, x):
-        x = self.input_embedding[(x,)]
-        x *= jnp.sqrt(x.shape[-1]).astype(x.dtype)
-        return x
-
-    def decode(self, x):
-        return jnp.dot(x, self.input_embedding.value.T)
 
 
 class Attention(nnx.Module):
@@ -270,7 +257,7 @@ class Block(nnx.Module):
         rope_base_frequency: int,
         rope_scale_factor: float,
         sliding_window_size: int | None = None,
-            *, rngs: nnx.Rngs,
+        *, rngs: nnx.Rngs,
     ):
         self.attn = Attention(
             num_heads=num_heads, num_kv_heads=num_kv_heads,
@@ -309,6 +296,7 @@ def load_pretrained(model_variant, mesh):
     # helpers
     flatten_path = lambda path: jax.tree_util.keystr(path, simple=True, separator='/')
     flatten_tree = lambda tree: {flatten_path(path):v for path, v in jax.tree.leaves_with_path(tree)}
+    print_tree = lambda tree: jax.tree.map_with_path(lambda path, v: print(f'{flatten_path(path)}: {v.shape}'), tree)
 
     # download weights
     weights_dir = kagglehub.model_download(f'google/gemma-3/flax/{model_variant}')
@@ -357,6 +345,7 @@ def load_pretrained(model_variant, mesh):
         key = key.replace('/value', '')
         key = key.replace('layers/', 'layer_')
         key = key.replace('kernel', 'w')
+        key = key.replace('embedding', 'input_embedding')
         key = key.replace('mlp/down_proj', 'mlp/linear')
         if '/scale' in key:
             val_fn = lambda x: x+1
