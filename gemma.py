@@ -218,12 +218,11 @@ class Attention(nnx.Module):
 
     def init_kv_cache(self, batch_size, max_seq_len):
         mesh = self.kv_einsum.kernel.value.sharding.mesh
-        dtype = self.kv_einsum.kernel.value.dtype
         _, num_kv_heads, _, head_dim = self.kv_einsum.kernel.value.shape
         sharding = NamedSharding(mesh, P('data', None, 'model', None))
         kv_cache = {
-            'k': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=dtype, device=sharding),
-            'v': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=dtype, device=sharding),
+            'k': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=jnp.float32, device=sharding),
+            'v': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=jnp.float32, device=sharding),
             'end_idx': jnp.array(0, dtype=jnp.int32),
         }
         return kv_cache
