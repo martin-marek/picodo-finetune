@@ -22,10 +22,10 @@ with timing.context('load model'):
 # sampling
 with timing.context('sampling'):
     with mesh:
-        inputs_text = ["Say 'Hi!':", "Write a Python program that prints 'Hello World!':"]
+        promps = ["Say 'Hi!'", "Write a Python program that prints 'Hello World!'"]
+        inputs_text = [f"<start_of_turn>user\n{q}<end_of_turn>\n<start_of_turn>model\n" for q in promps]
         inputs_tokenized = jnp.array(data.tokenize(inputs_text, vocab, 100))
-        eos_ids = jnp.array([vocab.eos_id(), vocab.EncodeAsIds('<end_of_turn>')[0]])
-        outputs_tokens = sample(model, inputs_tokenized, eos_ids)
+        outputs_tokens = sample(model, inputs_tokenized)
         outputs_text = vocab.DecodeIds(outputs_tokens)
         for inpt, output in zip(inputs_text, outputs_text):
-            print(f"Prompt:\n{inpt}\nOutput:\n{output}\n{10*'*'}")
+            print(f'{inpt+output}\n{10*"*"}')

@@ -14,7 +14,7 @@ class SamplingState:
 
 
 @partial(jax.jit, static_argnames=('model_graphdef'))
-def _sample_step(state, model_graphdef, model_state, eos_ids, pad_id=0):
+def _sample_step(state, model_graphdef, model_state, pad_id, eot_id):
 
     # we pass model_state as non-static arg, to avoid compiling it
     model = nnx.merge(model_graphdef, model_state)
@@ -26,16 +26,16 @@ def _sample_step(state, model_graphdef, model_state, eos_ids, pad_id=0):
 
     # update buffer
     next_token = state.tokens[:, state.step+1]
-    next_token = jnp.where((~state.done) & (next_token==pad_id), sampled_token, next_token)
-    tokens = state.tokens.at[:, state.step+1].set(next_token)
+    update_token = jnp.where((~state.done) & (next_token==pad_id), sampled_token, next_token)
+    tokens = state.tokens.at[:, state.step+1].set(update_token)
 
     # check if sampling is done
-    done = state.done | jnp.isin(next_token, eos_ids)
+    done = state.done | ((next_token==pad_id) & (sampled_token==eot_id))
 
     return SamplingState(state.step+1, tokens, kv_cache, done)
 
 
-def sample(model, tokens, eos_ids, pad_id=0):
+def sample(model, tokens, pad_id=0, eot_id=106):
     B, T = tokens.shape
 
     # initialize state
@@ -47,7 +47,7 @@ def sample(model, tokens, eos_ids, pad_id=0):
     )
 
     # sample next token inside a while loop
-    step_fn = lambda state: _sample_step(state, *nnx.split(model), eos_ids, pad_id)
+    step_fn = lambda state: _sample_step(state, *nnx.split(model), pad_id, eot_id)
     cond_fn = lambda state: (state.step < T) & jnp.any(~state.done)
     state = jax.lax.while_loop(cond_fn, step_fn, state)
 
