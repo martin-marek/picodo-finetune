@@ -12,4 +12,4 @@ def tokenize(sequences, vocab, seq_len, pad_id=0):
     for i, seq_tok in enumerate(sequences_tokenized):
         tokens[i, :len(seq_tok)] = seq_tok
 
-    return tokens
+    return jnp.array(tokens, dtype=jnp.int32)
