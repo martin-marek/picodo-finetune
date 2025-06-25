@@ -54,6 +54,6 @@ def sample(model, tokens, pad_id=0, eot_id=106):
     # extract output sequences
     outputs = []
     for in_seq, out_seq in zip(tokens, state.tokens):
-        outputs += [out_seq[jnp.argmax(in_seq==pad_id) : jnp.argmax(out_seq==pad_id)].tolist()]
+        outputs += [out_seq[jnp.argmax(in_seq==pad_id):].tolist()]
 
     return outputs
