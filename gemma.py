@@ -34,7 +34,7 @@ class GemmaConfig:
         return cls(
             num_layers=26,
             embed_dim=1152,
-            hidden_dim=6 * 1152,
+            hidden_dim=6912,
             num_heads=4,
             head_dim=256,
             num_kv_heads=1,
@@ -48,7 +48,7 @@ class GemmaConfig:
         return cls(
             num_layers=34,
             embed_dim=2560,
-            hidden_dim=2560 * 8 // 2,
+            hidden_dim=10240,
             num_heads=8,
             head_dim=256,
             num_kv_heads=4,
@@ -61,8 +61,8 @@ class GemmaConfig:
     def gemma3_12b(cls):
         return cls(
             num_layers=48,
-            embed_dim=30 * 128,
-            hidden_dim=8 * 30 * 128 // 2,
+            embed_dim=3840,
+            hidden_dim=15360,
             num_heads=16,
             head_dim=256,
             num_kv_heads=8,
@@ -76,7 +76,7 @@ class GemmaConfig:
         return cls(
             num_layers=62,
             embed_dim=5376,
-            hidden_dim=5376 * 8 // 2,
+            hidden_dim=21504,
             num_heads=32,
             head_dim=128,
             num_kv_heads=16,
@@ -91,7 +91,7 @@ class Gemma(nnx.Module):
 
     def __init__(self, config: GemmaConfig, rngs: nnx.Rngs):
         # self.embedder = Embedder(config.vocab_size, config.embed_dim, rngs=rngs)
-        self.embedder = nnx.Embed(config.vocab_size, config.embed_dim, rngs=rngs)
+        self.embedder = nnx.Embed(config.vocab_size, config.embed_dim, dtype=jnp.bfloat16, rngs=rngs)
         self.layers = [
             Block(
                 num_heads=config.num_heads,
@@ -206,7 +206,7 @@ class Attention(nnx.Module):
         # gqa attention
         attn_mask = jnp.broadcast_to(attn_mask[None, None, :, :], [B, N, T, S])
         encoded = jax.nn.dot_product_attention(query, key, value, mask=attn_mask, scale=self.query_pre_attn_scalar)
-        
+
         # output projection
         attn_output = self.attn_vec_einsum(encoded)
 
@@ -221,8 +221,8 @@ class Attention(nnx.Module):
         _, num_kv_heads, _, head_dim = self.kv_einsum.kernel.value.shape
         sharding = NamedSharding(mesh, P('data', None, 'model', None))
         kv_cache = {
-            'k': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=jnp.float32, device=sharding),
-            'v': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=jnp.float32, device=sharding),
+            'k': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=jnp.bfloat16, device=sharding),
+            'v': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=jnp.bfloat16, device=sharding),
             'end_idx': jnp.array(0, dtype=jnp.int32),
         }
         return kv_cache
@@ -329,7 +329,7 @@ def load_pretrained(model_variant, mesh):
         if 'mlp/gating_einsum' in key: pspec = P(None, 'model', 'data') # [2, F, D]
         # if pspec is None: print(f'WARNING: {key} has no sharding!')
         sharding = None if pspec is None else NamedSharding(mesh, pspec)
-        return jax.ShapeDtypeStruct(v.shape, v.dtype, sharding=sharding)
+        return jax.ShapeDtypeStruct(v.shape, jnp.bfloat16, sharding=sharding)
     checkpoint = jax.tree.map_with_path(add_sharding, checkpoint)
 
     # load checkpoint weights, then flatten the checkpoint keys
