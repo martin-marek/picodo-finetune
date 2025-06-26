@@ -197,10 +197,11 @@ class Attention(nnx.Module):
         else: # if sampling, all cached tokens should be visible
             attn_mask = (jnp.arange(S) <= kv_cache['end_idx'])[None] # [1, S]
 
-        # add window to attention mask (TODO)
+        # add window to attention mask
         if self.sliding_window_size is not None:
-            all_ones = jnp.ones_like(attn_mask) # [T, S]
-            sliding_mask = jnp.triu(all_ones, -1 * self.sliding_window_size + 1) & jnp.tril(all_ones, self.sliding_window_size - 1)
+            offset = 0 if kv_cache is None else kv_cache['end_idx']
+            t, s = jnp.mgrid[0:T, 0:S]
+            sliding_mask = (t - self.sliding_window_size + 1 + offset) <= s
             attn_mask &= sliding_mask
 
         # gqa attention
