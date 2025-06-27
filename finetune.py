@@ -34,11 +34,12 @@ def finetune(
     eval_dataset = 'MATH-500', # 'MATH-500', 'aime_2024'
     use_lora = False,
     n_epochs = 5,
-    learning_rate = 1e-5,
+    learning_rate = 1e-6,
     n_eval_samples = 30,
     eval_batch_size = 10,
     log_every_steps = 20,
-    max_seq_len = 8600,
+    train_seq_len = 8_600,
+    eval_seq_len = 12_000,
     seed = 0,
 ):
     train_config = locals()
@@ -50,9 +51,7 @@ def finetune(
     model_graphdef = nnx.graphdef(model)
 
     # load datasets
-    ds_train, ds_eval = data.load_datasets(eval_dataset)
-    tokens_train, train_loss_mask = data.tokenize_training_dataset(ds_train, vocab, max_seq_len)
-    eval_ds = data.tokenize_eval_dataset(ds_eval, vocab, max_seq_len)
+    tokens_train, train_loss_mask, ds_eval = data.load_datasets(eval_dataset, vocab, train_seq_len, eval_seq_len)
 
     # optimizer
     tx = optax.adamw(learning_rate, 0.9, 0.999)
@@ -77,9 +76,9 @@ def finetune(
             
             # eval
             model = nnx.merge(model_graphdef, opt_state.model)
-            accuracy = data.benchmark_model(key_eval, model, eval_ds, vocab, eval_batch_size, n_eval_samples)
+            eval_metrics = data.benchmark_model(key_eval, model, ds_eval, vocab, eval_batch_size, n_eval_samples)
             if jax.process_index() == 0:
-                wandb.log({'eval_acc': float(accuracy)}, step)
+                wandb.log(eval_metrics, step)
             if epoch == n_epochs: break
 
             # train for 1 epoch
