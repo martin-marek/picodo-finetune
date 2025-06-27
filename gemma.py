@@ -118,7 +118,7 @@ class Gemma(nnx.Module):
         x = jax.lax.with_sharding_constraint(x, P('data', None, 'model'))
 
         for i, layer in enumerate(self.layers):
-            x, kv_cache[i] = layer(x, kv_cache.get(i)) # [B, T, D]
+            x, kv_cache[i] = jax.remat(layer)(x, kv_cache.get(i)) # [B, T, D]
 
         x = self.final_norm(x)
         logits = jnp.dot(x, self.embedder.embedding.value.T) # [B, T, V]
@@ -182,7 +182,7 @@ class Attention(nnx.Module):
         else: # sampling
             positions = jnp.full([B, 1], kv_cache['end_idx']) # [B, 1]
 
-        # apply positional embedding
+        # apply positional embeddings
         query = apply_rope(query, positions, self.rope_base_frequency, self.rope_scale_factor)
         key = apply_rope(key, positions, self.rope_base_frequency, self.rope_scale_factor)
 
@@ -197,7 +197,7 @@ class Attention(nnx.Module):
         else: # if sampling, all cached tokens should be visible
             attn_mask = (jnp.arange(S) <= kv_cache['end_idx'])[None] # [1, S]
 
-        # add window to attention mask
+        # add window to attention mask (TODO)
         if self.sliding_window_size is not None:
             offset = 0 if kv_cache is None else kv_cache['end_idx']
             t, s = jnp.mgrid[0:T, 0:S]
