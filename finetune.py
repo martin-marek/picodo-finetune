@@ -45,7 +45,7 @@ def finetune(
     seed = 0,
 ):
     train_config = locals()
-    print(f'{train_config=}')
+    if jax.process_index() == 0: print(f'{train_config=}')
 
     # load model
     tensor_devices = jax.device_count() // sequence_devices
