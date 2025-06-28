@@ -54,7 +54,6 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len):
         answers_eval += [example['answer']]
     answers_eval = np.array(answers_eval)
     tokens_eval = tokenize(problems_eval, vocab, eval_seq_len)
-    print(f'{tokens_eval.shape=}')
     ds_eval = (tokens_eval, answers_eval)
     
     return tokens_train, train_loss_mask, ds_eval
