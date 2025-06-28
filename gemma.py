@@ -314,7 +314,7 @@ def load_pretrained(model_variant, mesh):
     model_state = nnx.state(model)
 
     # load checkpoint metadata
-    checkpointer = ocp.StandardCheckpointer()
+    checkpointer = ocp.Checkpointer(ocp.StandardCheckpointHandler())
     checkpoint = checkpointer.metadata(ckpt_path)
 
     # add checkpoint sharding annotations
