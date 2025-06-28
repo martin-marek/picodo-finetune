@@ -71,7 +71,7 @@ def sample(key, model, tokens, pad_id=0, eot_id=106):
 
     # extract output sequences
     outputs = []
-    for in_seq, out_seq in zip(tokens, state.tokens):
+    for in_seq, out_seq in zip(jax.device_get(tokens), jax.device_get(state.tokens)):
         out_seq = out_seq[jnp.argmax(in_seq==pad_id):]
         if jnp.any(out_seq==pad_id): out_seq = out_seq[:jnp.argmax(out_seq==pad_id)]
         outputs += [out_seq.tolist()]
