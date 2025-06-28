@@ -90,7 +90,6 @@ class Gemma(nnx.Module):
     """Gemma transformer."""
 
     def __init__(self, config: GemmaConfig, rngs: nnx.Rngs):
-        # self.embedder = Embedder(config.vocab_size, config.embed_dim, rngs=rngs)
         self.embedder = nnx.Embed(config.vocab_size, config.embed_dim, dtype=jnp.bfloat16, rngs=rngs)
         self.layers = [
             Block(
@@ -115,14 +114,14 @@ class Gemma(nnx.Module):
     ):
         V, D = self.embedder.embedding.value.shape
         x = self.embedder(tokens) * jnp.sqrt(D) # [B, T, D]
-        x = jax.lax.with_sharding_constraint(x, P('data', None, 'model'))
+        x = jax.lax.with_sharding_constraint(x, P(None, 'data', 'model'))
 
         for i, layer in enumerate(self.layers):
             x, kv_cache[i] = jax.remat(layer)(x, kv_cache.get(i)) # [B, T, D]
 
         x = self.final_norm(x)
         logits = jnp.dot(x, self.embedder.embedding.value.T) # [B, T, V]
-        logits = jax.lax.with_sharding_constraint(logits, P('data', None, 'model'))
+        logits = jax.lax.with_sharding_constraint(logits, P(None, 'data', 'model'))
 
         return logits, kv_cache
 
@@ -220,7 +219,7 @@ class Attention(nnx.Module):
     def init_kv_cache(self, batch_size, max_seq_len):
         mesh = self.kv_einsum.kernel.value.sharding.mesh
         _, num_kv_heads, _, head_dim = self.kv_einsum.kernel.value.shape
-        sharding = NamedSharding(mesh, P('data', None, 'model', None))
+        sharding = NamedSharding(mesh, P(None, 'data', 'model', None))
         kv_cache = {
             'k': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=jnp.bfloat16, device=sharding),
             'v': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=jnp.bfloat16, device=sharding),

@@ -6,6 +6,7 @@ import wandb
 from flax import nnx
 from tqdm.auto import tqdm
 from functools import partial
+from jax.sharding import NamedSharding, PartitionSpec as P
 import gemma
 import data
 
@@ -38,23 +39,29 @@ def finetune(
     n_eval_samples = 30,
     eval_batch_size = 10,
     log_every_steps = 20,
-    train_seq_len = 8_600,
-    eval_seq_len = 12_000,
+    train_seq_len = 9216,
+    eval_seq_len = 16384,
+    sequence_devices = 1,
     seed = 0,
 ):
     train_config = locals()
     print(f'{train_config=}')
 
     # load model
-    mesh = jax.make_mesh((1, jax.device_count()), ('data', 'model'))
+    tensor_devices = jax.device_count() // sequence_devices
+    mesh = jax.make_mesh((sequence_devices, tensor_devices), ('data', 'model'))
     model, vocab = gemma.load_pretrained(model_variant, mesh)
     model_graphdef = nnx.graphdef(model)
 
     # load datasets
-    tokens_train, train_loss_mask, ds_eval = data.load_datasets(eval_dataset, vocab, train_seq_len, eval_seq_len)
+    tokens_train, train_loss_mask, tokens_eval, answers_eval = data.load_datasets(eval_dataset, vocab, train_seq_len, eval_seq_len)
+    data_sharding = NamedSharding(mesh, P(None, 'data')) # [B, T]
+    tokens_train = jax.device_put(tokens_train, data_sharding)
+    train_loss_mask = jax.device_put(train_loss_mask, data_sharding)
+    tokens_eval = jax.device_put(tokens_eval, data_sharding)
 
     # optimizer
-    tx = optax.adamw(learning_rate, 0.9, 0.999)
+    tx = optax.adafactor(learning_rate, decay_rate=0.997)
     optimizer = nnx.Optimizer(model, tx)
     opt_graphdef, opt_state = nnx.split(optimizer)
 
@@ -76,7 +83,7 @@ def finetune(
             
             # eval
             model = nnx.merge(model_graphdef, opt_state.model)
-            eval_metrics = data.benchmark_model(key_eval, model, ds_eval, vocab, eval_batch_size, n_eval_samples)
+            eval_metrics = data.benchmark_model(key_eval, model, tokens_eval, answers_eval, vocab, eval_batch_size, n_eval_samples)
             if jax.process_index() == 0:
                 wandb.log(eval_metrics, step)
             if epoch == n_epochs: break
