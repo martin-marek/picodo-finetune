@@ -90,7 +90,7 @@ class Gemma(nnx.Module):
     """Gemma transformer."""
 
     def __init__(self, config: GemmaConfig, rngs: nnx.Rngs):
-        self.embedder = nnx.Embed(config.vocab_size, config.embed_dim, dtype=jnp.bfloat16, rngs=rngs)
+        self.embedder = nnx.Embed(config.vocab_size, config.embed_dim, dtype=jnp.float32, rngs=rngs)
         self.layers = [
             Block(
                 num_heads=config.num_heads,
@@ -189,6 +189,7 @@ class Attention(nnx.Module):
         if kv_cache is not None:
             key = kv_cache['k'].at[:, kv_cache['end_idx'], :, :].set(key[:, 0]) # [B, S, N, H]
             value = kv_cache['v'].at[:, kv_cache['end_idx'], :, :].set(value[:, 0]) # [B, S, N, H]
+            query = query.astype(kv_cache['k'].dtype)
 
         # compute attention mask [B, T, S]
         if kv_cache is None: # if training, use trinagular mask
@@ -329,7 +330,7 @@ def load_pretrained(model_variant, mesh):
         if 'mlp/gating_einsum' in key: pspec = P(None, 'model', 'data') # [2, F, D]
         # if pspec is None: print(f'WARNING: {key} has no sharding!')
         sharding = None if pspec is None else NamedSharding(mesh, pspec)
-        return jax.ShapeDtypeStruct(v.shape, jnp.bfloat16, sharding=sharding)
+        return jax.ShapeDtypeStruct(v.shape, jnp.float32, sharding=sharding)
     checkpoint = jax.tree.map_with_path(add_sharding, checkpoint)
 
     # load checkpoint weights, then flatten the checkpoint keys
