@@ -62,13 +62,14 @@ def finetune(
 
     # optimizer
     warmup_frac = 0.05
-    n_train_steps = n_epochs * len(tokens_train)
+    n_train_steps = max(n_epochs * len(tokens_train), 1)
     warmup_steps = int(warmup_frac * n_train_steps)
     lr_schedule = optax.schedules.warmup_cosine_decay_schedule(0, peak_lr, warmup_steps, n_train_steps)
     # tx = optax.adafactor(lr_schedule, decay_rate=0.997)
     tx = optax.adam(lr_schedule, 0.9, 0.997)
     optimizer = nnx.Optimizer(model, tx)
     opt_graphdef, opt_state = nnx.split(optimizer)
+    del optimizer
 
     # start wandb
     if jax.process_index() == 0:
@@ -76,23 +77,16 @@ def finetune(
 
     # training loop
     step = 0
-    epoch = 0
     train_loss = 0
     key = jax.random.PRNGKey(seed)
+    key, key_eval = jax.random.split(key)
     pbar = tqdm(total=n_train_steps) if jax.process_index() == 0 else None
     with mesh:
         # iterate over epochs
-        while True:
-            key, key_train, key_eval = jax.random.split(key, 3)
-            
-            # eval
-            model = nnx.merge(model_graphdef, opt_state.model)
-            eval_metrics = data.benchmark_model(key_eval, model, tokens_eval, answers_eval, vocab, eval_batch_size, n_eval_samples)
-            if jax.process_index() == 0:
-                wandb.log(eval_metrics, step)
-            if epoch == n_epochs: break
+        for epoch in range(n_epochs):
 
             # train for 1 epoch
+            key, key_train = jax.random.split(key)
             idxs = jax.random.permutation(key_train, len(tokens_train))
             for idx in idxs:
 
@@ -109,7 +103,14 @@ def finetune(
                     train_loss = 0
                 step += 1
                 if jax.process_index() == 0: pbar.update(1)
-            epoch += 1
+
+        # eval
+        model = nnx.merge(model_graphdef, opt_state.model)
+        del opt_state
+        eval_metrics = data.benchmark_model(key_eval, model, tokens_eval, answers_eval, vocab, eval_batch_size, n_eval_samples)
+        if jax.process_index() == 0:
+            wandb.log(eval_metrics, step)
+    
     pbar.close()
 
 
