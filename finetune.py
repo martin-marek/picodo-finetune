@@ -35,7 +35,7 @@ def finetune(
     eval_dataset = 'MATH-500', # 'MATH-500', 'aime_2024'
     use_lora = False,
     n_epochs = 5,
-    learning_rate = 1e-6,
+    peak_lr = 1e-6,
     n_eval_samples = 30,
     eval_batch_size = 10,
     log_every_steps = 20,
@@ -61,7 +61,12 @@ def finetune(
     tokens_eval = jax.device_put(tokens_eval, data_sharding)
 
     # optimizer
-    tx = optax.adafactor(learning_rate, decay_rate=0.997)
+    warmup_frac = 0.05
+    n_train_steps = n_epochs * len(tokens_train)
+    warmup_steps = int(warmup_frac * n_train_steps)
+    lr_schedule = optax.schedules.warmup_cosine_decay_schedule(0, peak_lr, warmup_steps, n_train_steps)
+    # tx = optax.adafactor(lr_schedule, decay_rate=0.997)
+    tx = optax.adam(lr_schedule, 0.9, 0.997)
     optimizer = nnx.Optimizer(model, tx)
     opt_graphdef, opt_state = nnx.split(optimizer)
 
@@ -74,7 +79,6 @@ def finetune(
     epoch = 0
     train_loss = 0
     key = jax.random.PRNGKey(seed)
-    n_train_steps = n_epochs * len(tokens_train)
     pbar = tqdm(total=n_train_steps) if jax.process_index() == 0 else None
     with mesh:
         # iterate over epochs
