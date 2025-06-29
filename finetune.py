@@ -31,13 +31,14 @@ def train_step(opt_state, opt_graphdef, model_graphdef, tokens, loss_mask):
 
 
 def finetune(
-    model_variant = 'gemma3-1b-it', # '1b', '4b', '12b', '27b'
-    eval_dataset = 'MATH-500', # 'MATH-500', 'aime_2024'
+    model_variant = 'gemma3-4b-it', # '1b', '4b', '12b', '27b'
+    eval_dataset = 'aime_2024', # 'aime_2024', 'MATH-500'
     use_lora = False,
-    n_epochs = 5,
+    optimizer_name = 'adafactor', # 'adam', 'adafactor'
     peak_lr = 1e-6,
+    n_epochs = 1,
     n_eval_samples = 30,
-    eval_batch_size = 10,
+    eval_batch_size = 15,
     log_every_steps = 20,
     train_seq_len = 9216,
     eval_seq_len = 16384,
@@ -65,8 +66,8 @@ def finetune(
     n_train_steps = max(n_epochs * len(tokens_train), 1)
     warmup_steps = int(warmup_frac * n_train_steps)
     lr_schedule = optax.schedules.warmup_cosine_decay_schedule(0, peak_lr, warmup_steps, n_train_steps)
-    # tx = optax.adafactor(lr_schedule, decay_rate=0.997)
-    tx = optax.adam(lr_schedule, 0.9, 0.997)
+    if optimizer_name == 'adam': tx = optax.adam(lr_schedule, 0.9, 0.997)    
+    if optimizer_name == 'adafactor': tx = optax.adafactor(lr_schedule, decay_rate=0.997)
     optimizer = nnx.Optimizer(model, tx)
     opt_graphdef, opt_state = nnx.split(optimizer)
     del optimizer
