@@ -12,7 +12,6 @@ def tokenize(sequences, vocab, seq_len, batch_divisor=1, pad_id=0):
     assert max(map(len, sequences_tokenized)) <= seq_len
     B, T = len(sequences), seq_len
     B = int(batch_divisor * math.ceil(B / batch_divisor)) # round T up to be divisible by `batch_divisor`
-    print(f'{B=}')
     tokens = np.full([B, T], pad_id, dtype=jnp.int32)
     tokens[:, 0] = vocab.bos_id()
 
