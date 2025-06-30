@@ -79,12 +79,7 @@ def finetune(
 
     # load datasets
     tokens_train, train_loss_mask, tokens_eval, problems_eval, answers_eval = data.load_datasets(eval_dataset, vocab, train_seq_len, eval_seq_len, eval_batch_size)
-    if train_parallelism == 'seq': train_data_pspec = P(None, 'data')
-    if train_parallelism == 'batch': train_data_pspec = P('data', None)
-    tokens_train = jax.device_put(tokens_train, NamedSharding(mesh, train_data_pspec))
-    train_loss_mask = jax.device_put(train_loss_mask, NamedSharding(mesh, train_data_pspec))
-    tokens_eval = jax.device_put(tokens_eval, NamedSharding(mesh, P('data', None)))
-
+    
     # optimizer
     warmup_frac = 0.05
     n_train_samples = len(tokens_train)
@@ -119,9 +114,15 @@ def finetune(
             idxs = jax.random.choice(key_train, n_train_samples, shape=[n_batches, grad_acc_steps, microbatch_size], replace=False)
             for idx in idxs:
 
+                # load batch
+                if train_parallelism == 'seq': train_data_pspec = P(None, None, 'data') # [grad_acc_steps, microbatch_size, seq_len]
+                if train_parallelism == 'batch': train_data_pspec = P(None, 'data', None) # [grad_acc_steps, microbatch_size, seq_len]
+                tokens_batch = jax.device_put(tokens_train[idx], NamedSharding(mesh, train_data_pspec)) # [grad_acc_steps, microbatch_size, seq_len]
+                loss_mask_batch = jax.device_put(train_loss_mask[idx], NamedSharding(mesh, train_data_pspec)) # [grad_acc_steps, microbatch_size, seq_len]
+                
                 # training step
-                if grad_acc_steps == 1: opt_state, batch_loss = train_step(opt_state, opt_graphdef, model_graphdef, tokens_train[idx[0]], train_loss_mask[idx[0]])
-                else: opt_state, batch_loss = train_step_grad_acc(opt_state, opt_graphdef, model_graphdef, tokens_train[idx], train_loss_mask[idx])
+                if grad_acc_steps == 1: opt_state, batch_loss = train_step(opt_state, opt_graphdef, model_graphdef, tokens_batch[0], loss_mask_batch[0])
+                else: opt_state, batch_loss = train_step_grad_acc(opt_state, opt_graphdef, model_graphdef, tokens_batch, loss_mask_batch)
                     
                 # logging
                 train_loss += batch_loss

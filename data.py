@@ -62,15 +62,18 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_diviso
     return tokens_train, train_loss_mask, tokens_eval, np.array(problems_eval), np.array(answers_eval)
 
 
-def benchmark_model(key, model, tokens_eval, problems_eval, answers_eval, vocab, eval_batch_size, n_eval_samples):
+def benchmark_model(key, model, tokens, problems_eval, answers_eval, vocab, batch_size, n_eval_samples):
     key_decoding, key_questions = jax.random.split(key)
     eot_token = vocab.EncodeAsIds('<end_of_turn>')[0]
-    sample_idxs = jax.random.choice(key_questions, len(tokens_eval), shape=[len(tokens_eval)//eval_batch_size, eval_batch_size], replace=False)
+    mesh = model.in_embed.embedding.value.sharding.mesh
+    n_batches = len(tokens) // batch_size
+    sample_idxs = jax.random.choice(key_questions, len(tokens), shape=[n_batches, batch_size], replace=False)
     lengths_list = []
     correct_list = []
     finished_list = []
     for batch_idx in sample_idxs:
-        completions_tokens = sample(key_decoding, model, tokens_eval[batch_idx])
+        tokens_batch = jax.device_put(tokens[batch_idx], NamedSharding(mesh, P('data', None)))
+        completions_tokens = sample(key_decoding, model, tokens_batch)
         completions_text = vocab.DecodeIds(completions_tokens)
         for sample_idx, completion_tokens, completion_text in zip(batch_idx, completions_tokens, completions_text):
             if sample_idx < len(problems_eval):
