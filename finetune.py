@@ -56,7 +56,7 @@ def finetune(
     model_graphdef = nnx.graphdef(model)
 
     # load datasets
-    tokens_train, train_loss_mask, tokens_eval, answers_eval = data.load_datasets(eval_dataset, vocab, train_seq_len, eval_seq_len)
+    tokens_train, train_loss_mask, tokens_eval, answers_eval = data.load_datasets(eval_dataset, vocab, train_seq_len, eval_seq_len, n_data_devices)
     tokens_train = jax.device_put(tokens_train, NamedSharding(mesh, P(None, 'data')))
     train_loss_mask = jax.device_put(train_loss_mask, NamedSharding(mesh, P(None, 'data')))
     tokens_eval = jax.device_put(tokens_eval, NamedSharding(mesh, P('data', None)))

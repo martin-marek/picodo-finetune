@@ -1,3 +1,4 @@
+import math
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -6,10 +7,12 @@ from math_verify import parse, verify
 from sampler import sample
 
 
-def tokenize(sequences, vocab, seq_len, pad_id=0):
+def tokenize(sequences, vocab, seq_len, batch_divisor=1, pad_id=0):
     sequences_tokenized = vocab.EncodeAsIds(sequences)
     assert max(map(len, sequences_tokenized)) <= seq_len
     B, T = len(sequences), seq_len
+    B = int(batch_divisor * math.ceil(B / batch_divisor)) # round T up to be divisible by `batch_divisor`
+    print(f'{B=}')
     tokens = np.full([B, T], pad_id, dtype=jnp.int32)
     tokens[:, 0] = vocab.bos_id()
 
@@ -19,7 +22,7 @@ def tokenize(sequences, vocab, seq_len, pad_id=0):
     return jnp.array(tokens, dtype=jnp.int32)
 
 
-def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len):
+def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_divisor=1):
     # load datasets
     ds_train = load_dataset('simplescaling/s1K-1.1', split='all') # ['question', 'solution', 'gemini_thinking_trajectory', 'gemini_attempt']
     ds_eval = load_dataset(f'HuggingFaceH4/{eval_ds_name}', split='all') # ['problem', 'answer']
@@ -53,7 +56,7 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len):
         problems_eval += [text]
         answers_eval += [example['answer']]
     answers_eval = np.array(answers_eval)
-    tokens_eval = tokenize(problems_eval, vocab, eval_seq_len)
+    tokens_eval = tokenize(problems_eval, vocab, eval_seq_len, batch_divisor)
     print(f'{tokens_eval.shape=}')
     
     return tokens_train, train_loss_mask, tokens_eval, answers_eval
@@ -61,7 +64,7 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len):
 
 def benchmark_model(key, model, tokens_eval, answers_eval, vocab, eval_batch_size, n_eval_samples):
     key_decoding, key_questions = jax.random.split(key)
-    n_eval_examples_total = len(tokens_eval)
+    n_eval_examples_total = len(answers_eval)
     eot_token = vocab.EncodeAsIds('<end_of_turn>')[0]
     sample_idxs = jax.random.choice(key_questions, n_eval_examples_total, shape=[n_eval_samples//eval_batch_size, eval_batch_size])
     lengths = []
