@@ -77,7 +77,7 @@ def benchmark_model(key, model, tokens_eval, answers_eval, vocab, eval_batch_siz
         correct += [verify(gold, parse(completion)) for gold, completion in zip(answers_eval[idx], completions_text)]
         for gold, completion, corr in zip(answers_eval[idx], completions_text, correct):
             print('------------')
-            print(f'COMPLETION:\n{completion}\nPARSED: {parse(completion)}\nGOLD: {gold}\nCORRECT:{corr}')
+            print(f'COMPLETION:\n{completion}\nPARSED: {parse(completion)}\nGOLD: {gold}\nCORRECT: {corr}')
 
     mean = lambda x: sum(x) / len(x)
     return dict(length=mean(lengths), finished=mean(finished), accuracy=mean(correct))
