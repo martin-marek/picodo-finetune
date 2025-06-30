@@ -2,6 +2,7 @@ import math
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.sharding import NamedSharding, PartitionSpec as P
 from datasets import load_dataset
 from math_verify import parse, verify
 from sampler import sample
