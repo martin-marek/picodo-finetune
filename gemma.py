@@ -90,7 +90,8 @@ class Gemma(nnx.Module):
     """Gemma transformer."""
 
     def __init__(self, config: GemmaConfig, rngs: nnx.Rngs):
-        self.embedder = nnx.Embed(config.vocab_size, config.embed_dim, dtype=jnp.float32, rngs=rngs)
+        self.in_embed = nnx.Embed(config.vocab_size, config.embed_dim, dtype=jnp.float32, rngs=rngs)
+        self.out_embed = nnx.Embed(config.vocab_size, config.embed_dim, dtype=jnp.float32, rngs=rngs)
         self.layers = [
             Block(
                 num_heads=config.num_heads,
@@ -112,16 +113,14 @@ class Gemma(nnx.Module):
         tokens, # [B, T]
         kv_cache = {}, # [S]
     ):
-        V, D = self.embedder.embedding.value.shape
-        x = self.embedder(tokens) * jnp.sqrt(D) # [B, T, D]
-        x = jax.lax.with_sharding_constraint(x, P(None, 'data', 'model'))
+        V, D = self.in_embed.embedding.value.shape
+        x = self.in_embed(tokens) * jnp.sqrt(D) # [B, T, D]
 
         for i, layer in enumerate(self.layers):
             x, kv_cache[i] = jax.remat(layer)(x, kv_cache.get(i)) # [B, T, D]
-
+        
         x = self.final_norm(x)
-        logits = jnp.dot(x, self.embedder.embedding.value.T) # [B, T, V]
-        logits = jax.lax.with_sharding_constraint(logits, P(None, 'data', 'model'))
+        logits = jnp.dot(x, self.out_embed.embedding.value.T) # [B, T, V]
 
         return logits, kv_cache
 
@@ -220,7 +219,7 @@ class Attention(nnx.Module):
     def init_kv_cache(self, batch_size, max_seq_len):
         mesh = self.kv_einsum.kernel.value.sharding.mesh
         _, num_kv_heads, _, head_dim = self.kv_einsum.kernel.value.shape
-        sharding = NamedSharding(mesh, P(None, 'data', 'model', None))
+        sharding = NamedSharding(mesh, P('data', None, 'model', None))
         kv_cache = {
             'k': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=jnp.bfloat16, device=sharding),
             'v': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=jnp.bfloat16, device=sharding),
@@ -345,7 +344,8 @@ def load_pretrained(model_variant, mesh):
         key = key.replace('/value', '')
         key = key.replace('layers/', 'layer_')
         key = key.replace('kernel', 'w')
-        key = key.replace('embedding', 'input_embedding')
+        key = key.replace('in_embed/embedding', 'embedder/input_embedding')
+        key = key.replace('out_embed/embedding', 'embedder/input_embedding')
         key = key.replace('mlp/down_proj', 'mlp/linear')
         if '/scale' in key:
             val_fn = lambda x: x+1
@@ -357,6 +357,7 @@ def load_pretrained(model_variant, mesh):
             val_fn = lambda x: x[1].T
         return val_fn(checkpoint[key])
     model_state = jax.tree.map_with_path(get_weights, model_state)
+    model_state['out_embed']['embedding'].value = jax.device_put(model_state['out_embed']['embedding'].value, NamedSharding(mesh, P('model', 'data'))) # [V, D]
     nnx.update(model, model_state)
 
     return model, vocab

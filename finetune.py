@@ -42,24 +42,24 @@ def finetune(
     log_every_steps = 20,
     train_seq_len = 9216,
     eval_seq_len = 16384,
-    sequence_devices = 1,
+    n_data_devices = 1,
+    logging = False,
     seed = 0,
 ):
     train_config = locals()
     if jax.process_index() == 0: print(f'{train_config=}')
 
     # load model
-    tensor_devices = jax.device_count() // sequence_devices
-    mesh = jax.make_mesh((sequence_devices, tensor_devices), ('data', 'model'))
+    n_tensor_devices = jax.device_count() // n_data_devices
+    mesh = jax.make_mesh((n_data_devices, n_tensor_devices), ('data', 'model'))
     model, vocab = gemma.load_pretrained(model_variant, mesh)
     model_graphdef = nnx.graphdef(model)
 
     # load datasets
     tokens_train, train_loss_mask, tokens_eval, answers_eval = data.load_datasets(eval_dataset, vocab, train_seq_len, eval_seq_len)
-    data_sharding = NamedSharding(mesh, P(None, 'data')) # [B, T]
-    tokens_train = jax.device_put(tokens_train, data_sharding)
-    train_loss_mask = jax.device_put(train_loss_mask, data_sharding)
-    tokens_eval = jax.device_put(tokens_eval, data_sharding)
+    tokens_train = jax.device_put(tokens_train, NamedSharding(mesh, P(None, 'data')))
+    train_loss_mask = jax.device_put(train_loss_mask, NamedSharding(mesh, P(None, 'data')))
+    tokens_eval = jax.device_put(tokens_eval, NamedSharding(mesh, P('data', None)))
 
     # optimizer
     warmup_frac = 0.05
@@ -73,7 +73,7 @@ def finetune(
     del optimizer
 
     # start wandb
-    if jax.process_index() == 0:
+    if logging and (jax.process_index()) == 0:
         wandb.init(project='picodo-finetune', config=train_config)
 
     # training loop
@@ -81,7 +81,7 @@ def finetune(
     train_loss = 0
     key = jax.random.PRNGKey(seed)
     key, key_eval = jax.random.split(key)
-    pbar = tqdm(total=n_train_steps) if jax.process_index() == 0 else None
+    pbar = tqdm(total=n_train_steps) if (jax.process_index() == 0) else None
     with mesh:
         # iterate over epochs
         for epoch in range(n_epochs):
@@ -99,7 +99,7 @@ def finetune(
                 if (step+1) % log_every_steps == 0:
                     avg_loss = train_loss / log_every_steps
                     if jax.process_index() == 0:
-                        wandb.log({'train_loss': float(avg_loss)}, step)
+                        if logging: wandb.log({'train_loss': float(avg_loss)}, step)
                         pbar.set_postfix_str(f'loss={float(avg_loss):.2f}')
                     train_loss = 0
                 step += 1
@@ -109,7 +109,7 @@ def finetune(
         model = nnx.merge(model_graphdef, opt_state.model)
         del opt_state
         eval_metrics = data.benchmark_model(key_eval, model, tokens_eval, answers_eval, vocab, eval_batch_size, n_eval_samples)
-        if jax.process_index() == 0:
+        if logging and (jax.process_index() == 0):
             wandb.log(eval_metrics, step)
     
     pbar.close()
