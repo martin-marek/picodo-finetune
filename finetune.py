@@ -33,16 +33,15 @@ def train_step(opt_state, opt_graphdef, model_graphdef, tokens, loss_mask):
 
 @partial(jax.jit, static_argnames=('opt_graphdef', 'model_graphdef'))
 def train_step_grad_acc(opt_state, opt_graphdef, model_graphdef, tokens, loss_mask):
-    n_batch = len(tokens)
     loss_mean = 0
     grad_mean = otu.tree_zeros_like(opt_state.model)
-    def step_fn(i , args):
+    def step_fn(i, args):
         grad_mean, loss_mean = args
-        batch_loss, batch_grads = jax.value_and_grad(loss_fn)(opt_state.model, model_graphdef, tokens[i, None], loss_mask[i, None])
+        batch_loss, batch_grads = jax.value_and_grad(loss_fn)(opt_state.model, model_graphdef, tokens[i], loss_mask[i])
         grad_mean = jax.tree.map(lambda m, g: (i*m + g) / (i+1), grad_mean, batch_grads)
         loss_mean = (i*loss_mean + batch_loss) / (i+1)
         return grad_mean, loss_mean
-    grad_mean, loss_mean = jax.lax.fori_loop(0, n_batch, step_fn, (grad_mean, loss_mean))
+    grad_mean, loss_mean = jax.lax.fori_loop(0, len(tokens), step_fn, (grad_mean, loss_mean))
     optimizer = nnx.merge(opt_graphdef, opt_state)
     optimizer.update(grad_mean)
     opt_state = nnx.state(optimizer)
@@ -55,14 +54,17 @@ def finetune(
     use_lora = False,
     optimizer_name = 'adafactor', # 'adam', 'adafactor'
     peak_lr = 1e-6,
+    b2 = 0.997,
     n_epochs = 1,
     batch_size = 1,
+    microbatch_size = 1,
     n_eval_samples = 30,
     eval_batch_size = 15,
-    log_every_steps = 20,
+    log_every_steps = 1,
     train_seq_len = 9216,
     eval_seq_len = 16384,
     n_data_devices = 1,
+    train_seq_parallelism = True,
     logging = False,
     seed = 0,
 ):
@@ -76,26 +78,28 @@ def finetune(
     model_graphdef = nnx.graphdef(model)
 
     # load datasets
-    tokens_train, train_loss_mask, tokens_eval, problems_eval, answers_eval = data.load_datasets(eval_dataset, vocab, train_seq_len, eval_seq_len, n_data_devices)
-    tokens_train = jax.device_put(tokens_train, NamedSharding(mesh, P(None, 'data')))
-    train_loss_mask = jax.device_put(train_loss_mask, NamedSharding(mesh, P(None, 'data')))
+    tokens_train, train_loss_mask, tokens_eval, problems_eval, answers_eval = data.load_datasets(eval_dataset, vocab, train_seq_len, eval_seq_len, eval_batch_size)
+    train_data_pspec = P(None, 'data') if train_seq_parallelism else P('data', None) # sequence or data parallelism
+    tokens_train = jax.device_put(tokens_train, NamedSharding(mesh, train_data_pspec))
+    train_loss_mask = jax.device_put(train_loss_mask, NamedSharding(mesh, train_data_pspec))
     tokens_eval = jax.device_put(tokens_eval, NamedSharding(mesh, P('data', None)))
 
     # optimizer
     warmup_frac = 0.05
     n_train_samples = len(tokens_train)
     n_batches = n_train_samples // batch_size
-    n_train_steps = max(n_epochs * n_batches, 1)
-    warmup_steps = int(warmup_frac * n_train_steps)
-    lr_schedule = optax.schedules.warmup_cosine_decay_schedule(0, peak_lr, warmup_steps, n_train_steps)
-    if optimizer_name == 'adam': tx = optax.adam(lr_schedule, 0.9, 0.997)    
-    if optimizer_name == 'adafactor': tx = optax.adafactor(lr_schedule, decay_rate=0.997)
+    grad_acc_steps = batch_size // microbatch_size
+    n_optimizer_steps = n_epochs * n_batches
+    warmup_steps = int(warmup_frac * n_optimizer_steps)
+    lr_schedule = optax.schedules.warmup_cosine_decay_schedule(0, peak_lr, warmup_steps, max(1, n_optimizer_steps))
+    if optimizer_name == 'adam': tx = optax.adam(lr_schedule, 0.9, b2)
+    if optimizer_name == 'adafactor': tx = optax.adafactor(lr_schedule, decay_rate=b2)
     optimizer = nnx.Optimizer(model, tx)
     opt_graphdef, opt_state = nnx.split(optimizer)
     del optimizer
 
     # start wandb
-    if logging and (jax.process_index()) == 0:
+    if logging and (jax.process_index() == 0):
         wandb.init(project='picodo-finetune', config=train_config)
 
     # training loop
@@ -103,20 +107,20 @@ def finetune(
     train_loss = 0
     key = jax.random.PRNGKey(seed)
     key, key_eval = jax.random.split(key)
-    pbar = tqdm(total=n_train_steps) if (jax.process_index() == 0) else None
     with mesh:
         # iterate over epochs
+        pbar = tqdm(total=n_optimizer_steps) if ((n_epochs > 0) and (jax.process_index() == 0)) else None
         for epoch in range(n_epochs):
 
             # train for 1 epoch
             # assume that microbatch size always 1
             key, key_train = jax.random.split(key)
-            idxs = jax.random.choice(key_train, n_train_samples, shape=[n_batches, batch_size], replace=False)
+            idxs = jax.random.choice(key_train, n_train_samples, shape=[n_batches, grad_acc_steps, microbatch_size], replace=False)
             for idx in idxs:
 
                 # training step
-                _train_step = train_step if batch_size == 1 else train_step_grad_acc
-                opt_state, batch_loss = _train_step(opt_state, opt_graphdef, model_graphdef, tokens_train[idx], train_loss_mask[idx])
+                if grad_acc_steps == 1: opt_state, batch_loss = train_step(opt_state, opt_graphdef, model_graphdef, tokens_train[idx[0]], train_loss_mask[idx[0]])
+                else: opt_state, batch_loss = train_step_grad_acc(opt_state, opt_graphdef, model_graphdef, tokens_train[idx], train_loss_mask[idx])
                     
                 # logging
                 train_loss += batch_loss
@@ -128,15 +132,15 @@ def finetune(
                     train_loss = 0
                 step += 1
                 if jax.process_index() == 0: pbar.update(1)
-
+        if n_epochs > 0: pbar.close()
+        
         # eval
         model = nnx.merge(model_graphdef, opt_state.model)
         del opt_state
         eval_metrics = data.benchmark_model(key_eval, model, tokens_eval, problems_eval, answers_eval, vocab, eval_batch_size, n_eval_samples)
         if logging and (jax.process_index() == 0):
             wandb.log(eval_metrics, step)
-    
-    pbar.close()
+            wandb.finish()
 
 
 if __name__ == '__main__':

@@ -11,7 +11,7 @@ def tokenize(sequences, vocab, seq_len, batch_divisor=1, pad_id=0):
     sequences_tokenized = vocab.EncodeAsIds(sequences)
     assert max(map(len, sequences_tokenized)) <= seq_len
     B, T = len(sequences), seq_len
-    B = int(batch_divisor * math.ceil(B / batch_divisor)) # round T up to be divisible by `batch_divisor`
+    B = int(batch_divisor * math.ceil(B / batch_divisor)) # round B up to be divisible by `batch_divisor`
     tokens = np.full([B, T], pad_id, dtype=jnp.int32)
     tokens[:, 0] = vocab.bos_id()
 
@@ -45,39 +45,44 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_diviso
     print(f'train dataset max. length: {jnp.argmax(tokens_train==0, axis=1).max()}')
 
     # tokenize eval dataset
+    prompts_eval = []
     problems_eval = []
     answers_eval = []
     for i, example in enumerate(ds_eval):
-        text = (f'<start_of_turn>user\n'
-                f'{example["problem"]}\n'
-                f'<end_of_turn>\n'
-                f'<start_of_turn>model\n')
-        problems_eval += [text]
+        prompt = (f'<start_of_turn>user\n'
+                  f'{example["problem"]}\n'
+                  f'<end_of_turn>\n'
+                  f'<start_of_turn>model\n')
+        prompts_eval += [prompt]
+        problems_eval += [example["problem"]]
         answers_eval += [example['answer']]
-    answers_eval = np.array(answers_eval)
-    tokens_eval = tokenize(problems_eval, vocab, eval_seq_len, batch_divisor)
+    tokens_eval = tokenize(prompts_eval, vocab, eval_seq_len, batch_divisor)
     print(f'{tokens_eval.shape=}')
     
-    return tokens_train, train_loss_mask, tokens_eval, problems_eval, answers_eval
+    return tokens_train, train_loss_mask, tokens_eval, np.array(problems_eval), np.array(answers_eval)
 
 
 def benchmark_model(key, model, tokens_eval, problems_eval, answers_eval, vocab, eval_batch_size, n_eval_samples):
     key_decoding, key_questions = jax.random.split(key)
-    n_eval_examples_total = len(answers_eval)
     eot_token = vocab.EncodeAsIds('<end_of_turn>')[0]
-    sample_idxs = jax.random.choice(key_questions, n_eval_examples_total, shape=[n_eval_samples//eval_batch_size, eval_batch_size], replace=False)
-    lengths = []
-    correct = []
-    finished = []
-    for idx in sample_idxs:
-        completions_tokens = sample(key_decoding, model, tokens_eval[idx])
+    sample_idxs = jax.random.choice(key_questions, len(tokens_eval), shape=[len(tokens_eval)//eval_batch_size, eval_batch_size], replace=False)
+    lengths_list = []
+    correct_list = []
+    finished_list = []
+    for batch_idx in sample_idxs:
+        completions_tokens = sample(key_decoding, model, tokens_eval[batch_idx])
         completions_text = vocab.DecodeIds(completions_tokens)
-        lengths += [len(seq) for seq in completions_tokens]
-        finished += [eot_token in seq for seq in completions_tokens]
-        correct += [verify(gold, parse(completion)) for gold, completion in zip(answers_eval[idx], completions_text)]
-        for problem, gold, completion, corr in zip(problems_eval[idx], answers_eval[idx], completions_text, correct):
-            print('------------')
-            print(f'PROBLEM:\n{problem}\nCOMPLETION:\n{completion}\nPARSED: {parse(completion)}\nGOLD: {gold}\nCORRECT: {corr}')
+        for sample_idx, completion_tokens, completion_text in zip(batch_idx, completions_tokens, completions_text):
+            if sample_idx < len(problems_eval):
+                problem = problems_eval[sample_idx]
+                gold = answers_eval[sample_idx]
+                parsed = parse(completion_text)
+                finished = eot_token in completion_tokens
+                correct = verify(gold, parsed)
+                lengths_list += [len(completion_tokens)]
+                finished_list += [finished]
+                correct_list += [correct]
+                print('------------')
+                print(f'PROMPT:\n{problem}\nCOMPLETION:\n{completion_text}\nPARSED: {parsed}\nGOLD: {gold}\nCORRECT: {correct}')
 
-    mean = lambda x: sum(x) / len(x)
-    return dict(length=mean(lengths), finished=mean(finished), accuracy=mean(correct))
+    return dict(length=np.median(lengths_list), finished=np.mean(finished_list), accuracy=np.mean(correct_list))
