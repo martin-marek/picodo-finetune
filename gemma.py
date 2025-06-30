@@ -186,9 +186,10 @@ class Attention(nnx.Module):
 
         # load kv cache
         if kv_cache is not None:
-            key = kv_cache['k'].at[:, kv_cache['end_idx'], :, :].set(key[:, 0]) # [B, S, N, H]
-            value = kv_cache['v'].at[:, kv_cache['end_idx'], :, :].set(value[:, 0]) # [B, S, N, H]
-            query = query.astype(kv_cache['k'].dtype)
+            cache_dtype = kv_cache['k'].dtype
+            key = kv_cache['k'].at[:, kv_cache['end_idx'], :, :].set(key[:, 0].astype(cache_dtype)) # [B, S, N, H]
+            value = kv_cache['v'].at[:, kv_cache['end_idx'], :, :].set(value[:, 0].astype(cache_dtype)) # [B, S, N, H]
+            query = query.astype(cache_dtype)
 
         # compute attention mask [B, T, S]
         if kv_cache is None: # if training, use trinagular mask
