@@ -58,14 +58,14 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_diviso
     tokens_eval = tokenize(problems_eval, vocab, eval_seq_len, batch_divisor)
     print(f'{tokens_eval.shape=}')
     
-    return tokens_train, train_loss_mask, tokens_eval, answers_eval
+    return tokens_train, train_loss_mask, tokens_eval, problems_eval, answers_eval
 
 
-def benchmark_model(key, model, tokens_eval, answers_eval, vocab, eval_batch_size, n_eval_samples):
+def benchmark_model(key, model, tokens_eval, problems_eval, answers_eval, vocab, eval_batch_size, n_eval_samples):
     key_decoding, key_questions = jax.random.split(key)
     n_eval_examples_total = len(answers_eval)
     eot_token = vocab.EncodeAsIds('<end_of_turn>')[0]
-    sample_idxs = jax.random.choice(key_questions, n_eval_examples_total, shape=[n_eval_samples//eval_batch_size, eval_batch_size])
+    sample_idxs = jax.random.choice(key_questions, n_eval_examples_total, shape=[n_eval_samples//eval_batch_size, eval_batch_size], replace=False)
     lengths = []
     correct = []
     finished = []
@@ -75,9 +75,9 @@ def benchmark_model(key, model, tokens_eval, answers_eval, vocab, eval_batch_siz
         lengths += [len(seq) for seq in completions_tokens]
         finished += [eot_token in seq for seq in completions_tokens]
         correct += [verify(gold, parse(completion)) for gold, completion in zip(answers_eval[idx], completions_text)]
-        for gold, completion, corr in zip(answers_eval[idx], completions_text, correct):
+        for problem, gold, completion, corr in zip(problems_eval[idx], answers_eval[idx], completions_text, correct):
             print('------------')
-            print(f'COMPLETION:\n{completion}\nPARSED: {parse(completion)}\nGOLD: {gold}\nCORRECT: {corr}')
+            print(f'PROBLEM:\n{problem}\nCOMPLETION:\n{completion}\nPARSED: {parse(completion)}\nGOLD: {gold}\nCORRECT: {corr}')
 
     mean = lambda x: sum(x) / len(x)
     return dict(length=mean(lengths), finished=mean(finished), accuracy=mean(correct))
