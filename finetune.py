@@ -49,10 +49,10 @@ def train_step_grad_acc(opt_state, opt_graphdef, model_graphdef, tokens, loss_ma
 
 
 def finetune(
-    model_variant = 'gemma3-4b-it', # '1b', '4b', '12b', '27b'
-    eval_dataset = 'aime_2024', # 'aime_2024', 'MATH-500'
+    model_variant = 'gemma3-4b-it', # ['1b', '4b', '12b', '27b']
+    eval_dataset = 'aime_2024', # ['aime_2024', 'MATH-500']
     use_lora = False,
-    optimizer_name = 'adafactor', # 'adam', 'adafactor'
+    optimizer_name = 'adafactor', # ['adam', 'adafactor']
     peak_lr = 1e-6,
     b2 = 0.997,
     n_epochs = 1,
@@ -64,7 +64,7 @@ def finetune(
     train_seq_len = 9216,
     eval_seq_len = 16384,
     n_data_devices = 1,
-    train_seq_parallelism = True,
+    train_parallelism = 'seq', # ['seq', 'batch']
     logging = False,
     seed = 0,
 ):
@@ -79,7 +79,8 @@ def finetune(
 
     # load datasets
     tokens_train, train_loss_mask, tokens_eval, problems_eval, answers_eval = data.load_datasets(eval_dataset, vocab, train_seq_len, eval_seq_len, eval_batch_size)
-    train_data_pspec = P(None, 'data') if train_seq_parallelism else P('data', None) # sequence or data parallelism
+    if train_parallelism == 'seq': train_data_pspec = P(None, 'data')
+    if train_parallelism == 'batch': train_data_pspec = P('data', None)
     tokens_train = jax.device_put(tokens_train, NamedSharding(mesh, train_data_pspec))
     train_loss_mask = jax.device_put(train_loss_mask, NamedSharding(mesh, train_data_pspec))
     tokens_eval = jax.device_put(tokens_eval, NamedSharding(mesh, P('data', None)))
