@@ -134,7 +134,7 @@ def finetune(
                     train_loss = 0
                 step += 1
                 if jax.process_index() == 0: pbar.update(1)
-        if n_epochs > 0: pbar.close()
+        if (n_epochs > 0) and (jax.process_index() == 0): pbar.close()
         
         # eval
         model = nnx.merge(model_graphdef, opt_state.model)
