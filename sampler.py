@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import flax
 from flax import nnx
+from tqdm.auto import tqdm
 from functools import partial
 
 
@@ -27,8 +28,8 @@ def _sample_top_p(key, probs, p=0.95):
     return next_token
 
 
-@partial(jax.jit, static_argnames=('model_graphdef'))
-def _sample_step(state, model_graphdef, model_state, pad_id, eot_id, temperature=1):
+#@partial(jax.jit, static_argnames=('model_graphdef'))
+def _sample_step(state, model_graphdef, model_state, pbar, pad_id=0, eot_id=106, temperature=1):
 
     # we pass model_state as non-static arg, to avoid compiling it
     model = nnx.merge(model_graphdef, model_state)
@@ -37,7 +38,6 @@ def _sample_step(state, model_graphdef, model_state, pad_id, eot_id, temperature
     key, key_sampling = jax.random.split(state.key)
     last_token = state.tokens[:, state.step, None] # [B, 1]
     logits, kv_cache = model(last_token, state.kv_cache) # [B, 1, V]
-    # sampled_token = jnp.argmax(logits, axis=-1)[:, 0] # [B]
     probs = jax.nn.softmax(logits[:, 0, :] / temperature, axis=-1) # [B, V]
     sampled_token = _sample_top_p(key_sampling, probs)
 
@@ -48,7 +48,8 @@ def _sample_step(state, model_graphdef, model_state, pad_id, eot_id, temperature
 
     # check if sampling is done
     done = state.done | ((next_token==pad_id) & (sampled_token==eot_id))
-
+    jax.debug.callback(lambda: pbar.update(1) if jax.process_index() == 0 else None)
+    
     return SamplingState(key, state.step+1, tokens, kv_cache, done)
 
 
@@ -65,7 +66,8 @@ def sample(key, model, tokens, pad_id=0, eot_id=106):
     )
 
     # sample next token inside a while loop
-    step_fn = lambda state: _sample_step(state, *nnx.split(model), pad_id, eot_id)
+    pbar = tqdm(total=T, desc='Sampling') if (jax.process_index() == 0) else None
+    step_fn = lambda state: _sample_step(state, *nnx.split(model), pbar, pad_id, eot_id)
     cond_fn = lambda state: (state.step < T) & jnp.any(~state.done)
     state = jax.lax.while_loop(cond_fn, step_fn, state)
 

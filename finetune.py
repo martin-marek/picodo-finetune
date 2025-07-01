@@ -105,7 +105,7 @@ def finetune(
     key, key_eval = jax.random.split(key)
     with mesh:
         # iterate over epochs
-        pbar = tqdm(total=n_optimizer_steps) if ((n_epochs > 0) and (jax.process_index() == 0)) else None
+        if ((n_epochs > 0) and (jax.process_index() == 0)): pbar = tqdm(total=n_optimizer_steps, desc='Training')
         for epoch in range(n_epochs):
 
             # train for 1 epoch
