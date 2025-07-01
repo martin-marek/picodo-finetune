@@ -16,7 +16,8 @@ class SamplingState:
 
 
 def _sample_top_p(key, probs, p=0.95):
-    """Sample a token using top-p sampling."""
+    """Sample a token using top-p sampling.
+    https://github.com/google/flax/blob/cca78723892c539b42c261d2625168d39b61c495/examples/gemma/sampler.py#L38"""
     probs_sorted, indices = jax.lax.top_k(probs, k=probs.shape[-1])
     cumsum_probs = jnp.cumsum(probs_sorted, axis=-1)
     mask = cumsum_probs - probs_sorted > p
@@ -69,6 +70,8 @@ def sample(key, model, tokens, pad_id=0, eot_id=106):
     step_fn = lambda state: _sample_step(state, *nnx.split(model), pbar, pad_id, eot_id)
     cond_fn = lambda state: (state.step < T) & jnp.any(~state.done)
     state = jax.lax.while_loop(cond_fn, step_fn, state)
+    jax.effects_barrier()
+    if jax.process_index() == 0: pbar.close()
 
     # extract output sequences
     outputs = []
