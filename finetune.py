@@ -22,7 +22,7 @@ def loss_fn(model_state, model_graphdef, x, loss_mask): # [B, T]
     return (losses * loss_mask).sum() / loss_mask.sum()
 
 
-@partial(jax.jit, static_argnames=('opt_graphdef', 'model_graphdef'), donate_argnames=('opt_state'))
+@partial(jax.jit, static_argnames=('opt_graphdef', 'model_graphdef'))
 def train_step(opt_state, opt_graphdef, model_graphdef, tokens, loss_mask):
     loss, grads = jax.value_and_grad(loss_fn)(opt_state.model, model_graphdef, tokens, loss_mask)
     optimizer = nnx.merge(opt_graphdef, opt_state)
@@ -31,7 +31,7 @@ def train_step(opt_state, opt_graphdef, model_graphdef, tokens, loss_mask):
     return opt_state, loss
 
 
-@partial(jax.jit, static_argnames=('opt_graphdef', 'model_graphdef'), donate_argnames=('opt_state'))
+@partial(jax.jit, static_argnames=('opt_graphdef', 'model_graphdef'))
 def train_step_grad_acc(opt_state, opt_graphdef, model_graphdef, tokens, loss_mask):
     loss_mean = 0
     grad_mean = otu.tree_zeros_like(opt_state.model)
@@ -62,7 +62,7 @@ def finetune(
     eval_batch_size = 15,
     log_every_steps = 1,
     train_seq_len = 9216,
-    eval_seq_len = 16384,
+    eval_seq_len = 32768,
     n_data_devices = 1,
     train_parallelism = 'seq', # ['seq', 'batch']
     logging = False,
@@ -92,7 +92,7 @@ def finetune(
     if optimizer_name == 'adafactor': tx = optax.adafactor(lr_schedule, decay_rate=b2)
     optimizer = nnx.Optimizer(model, tx)
     opt_graphdef, opt_state = nnx.split(optimizer)
-    del optimizer
+    del model, optimizer
 
     # start wandb
     if logging and (jax.process_index() == 0):
@@ -145,4 +145,4 @@ def finetune(
 
 
 if __name__ == '__main__':
-    fire.Fire(finetune, strict=True)
+    fire.Fire(finetune)
