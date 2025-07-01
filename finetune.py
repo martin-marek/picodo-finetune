@@ -59,12 +59,12 @@ def finetune(
     microbatch_size = 1,
     n_eval_samples = None,
     eval_batch_size = 32,
-    log_every_steps = 1,
     train_seq_len = 9216,
     eval_seq_len = 1024,
     n_data_devices = 1,
     train_parallelism = 'seq', # ['seq', 'batch']
     temperature = 1,
+    log_every_steps = 1,
     logging = False,
     seed = 0,
     **kwargs,
