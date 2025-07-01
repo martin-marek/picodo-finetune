@@ -55,7 +55,7 @@ def finetune(
     optimizer_name = 'adafactor', # ['adam', 'adafactor']
     peak_lr = 1e-6,
     b2 = 0.997,
-    n_epochs = 1,
+    n_epochs = 0,
     batch_size = 1,
     microbatch_size = 1,
     n_eval_samples = 30,
@@ -65,6 +65,7 @@ def finetune(
     eval_seq_len = 1024,
     n_data_devices = 1,
     train_parallelism = 'seq', # ['seq', 'batch']
+    temperature = 1,
     logging = False,
     seed = 0,
     **kwargs,
@@ -142,7 +143,7 @@ def finetune(
         # eval
         model = nnx.merge(model_graphdef, opt_state.model)
         del opt_state
-        eval_metrics = data.benchmark_model(key_eval, model, tokens_eval, problems_eval, answers_eval, vocab, eval_batch_size, n_eval_samples)
+        eval_metrics = data.benchmark_model(key_eval, model, tokens_eval, problems_eval, answers_eval, vocab, eval_batch_size, n_eval_samples, temperature)
         if logging and (jax.process_index() == 0):
             wandb.log(eval_metrics, step)
             wandb.finish()

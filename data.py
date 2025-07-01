@@ -63,7 +63,7 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_diviso
     return tokens_train, train_loss_mask, tokens_eval, np.array(problems_eval), np.array(answers_eval)
 
 
-def benchmark_model(key, model, tokens, problems_eval, answers_eval, vocab, batch_size, n_eval_samples, pad_id=0, eot_id=106):
+def benchmark_model(key, model, tokens, problems_eval, answers_eval, vocab, batch_size, n_eval_samples, temperature=1, pad_id=0, eot_id=106):
     key_decoding, key_questions = jax.random.split(key)
     mesh = model.in_embed.embedding.value.sharding.mesh
     n_batches = len(tokens) // batch_size
@@ -73,7 +73,7 @@ def benchmark_model(key, model, tokens, problems_eval, answers_eval, vocab, batc
     finished_list = []
     for batch_idx in sample_idxs:
         tokens_batch = jax.device_put(tokens[batch_idx], NamedSharding(mesh, P('data', None)))
-        completions_tokens = sample(key_decoding, model, tokens_batch)
+        completions_tokens = sample(key_decoding, model, tokens_batch, temperature)
         completions_text = vocab.DecodeIds(completions_tokens)
         for sample_idx, completion_tokens, completion_text in zip(batch_idx, completions_tokens, completions_text):
             if sample_idx < len(problems_eval):

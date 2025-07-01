@@ -38,8 +38,11 @@ def _sample_step(state, model_graphdef, model_state, pbar, temperature=1, pad_id
     key, key_sampling = jax.random.split(state.key)
     input_token = state.tokens[:, state.step, None] # [B, 1]
     logits, kv_cache = model(input_token, state.kv_cache) # [B, 1, V]
-    probs = jax.nn.softmax(logits[:, 0, :] / temperature, axis=-1) # [B, V]
-    sampled_token = _sample_top_p(key_sampling, probs)
+    if temperature == 0:
+        sampled_token = logits[:, 0, :].argmax(1) # [B]
+    else:
+        probs = jax.nn.softmax(logits[:, 0, :] / temperature, axis=-1) # [B, V]
+        sampled_token = _sample_top_p(key_sampling, probs)
 
     # update buffer
     next_token = state.tokens[:, state.step+1]
@@ -53,7 +56,7 @@ def _sample_step(state, model_graphdef, model_state, pbar, temperature=1, pad_id
     return SamplingState(key, state.step+1, tokens, kv_cache, done)
 
 
-def sample(key, model, tokens, pad_id=0):
+def sample(key, model, tokens, temperature=1, pad_id=0):
     B, T = tokens.shape
 
     # initialize state
@@ -67,7 +70,7 @@ def sample(key, model, tokens, pad_id=0):
 
     # sample next token inside a while loop
     pbar = tqdm(total=T, desc='Sampling') if (jax.process_index() == 0) else None
-    step_fn = lambda state: _sample_step(state, *nnx.split(model), pbar)
+    step_fn = lambda state: _sample_step(state, *nnx.split(model), pbar, temperature)
     cond_fn = lambda state: (state.step < T) & jnp.any(~state.done)
     state = jax.lax.while_loop(cond_fn, step_fn, state)
     jax.effects_barrier()
