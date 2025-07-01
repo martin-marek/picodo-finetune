@@ -33,9 +33,9 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_diviso
         text = (f'<start_of_turn>user\n'
                 f'{example["question"]}<end_of_turn>\n'
                 f'<start_of_turn>model\n'
-                f'<start_of_turn>think\n'
+                f'<think>\n'
                 f'{example["gemini_thinking_trajectory"]}\n'
-                f'<start_of_turn>answer\n'
+                f'<\\think>\n'
                 f'{example["gemini_attempt"]}<end_of_turn>')
         examples_train += [text]
     tokens_train = jnp.array(tokenize(examples_train, vocab, train_seq_len))
@@ -53,7 +53,7 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_diviso
         prompt = (f'<start_of_turn>user\n'
                   f'{example["problem"]} Hint: the answer is an integer between $0$ and $999$, inclusive.<end_of_turn>\n'
                   f'<start_of_turn>model\n'
-                  f'<start_of_turn>think\n')
+                  f'<think>\n')
         prompts_eval += [prompt]
         problems_eval += [example["problem"]]
         answers_eval += [example['answer']]
