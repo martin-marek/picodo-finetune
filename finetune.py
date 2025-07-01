@@ -62,7 +62,7 @@ def finetune(
     eval_batch_size = 16,
     log_every_steps = 1,
     train_seq_len = 9216,
-    eval_seq_len = 32768,
+    eval_seq_len = 16384,
     n_data_devices = 1,
     train_parallelism = 'seq', # ['seq', 'batch']
     logging = False,
