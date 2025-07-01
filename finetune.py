@@ -145,4 +145,4 @@ def finetune(
 
 
 if __name__ == '__main__':
-    fire.Fire(finetune)
+    fire.Fire(finetune, strict=True)
