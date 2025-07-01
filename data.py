@@ -51,7 +51,7 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_diviso
     answers_eval = []
     for i, example in enumerate(ds_eval):
         prompt = (f'<start_of_turn>user\n'
-                  f'{example["problem"]}<end_of_turn>\n'
+                  f'{example["problem"]} Hint: the answer is an integer between $0$ and $999$, inclusive.<end_of_turn>\n'
                   f'<start_of_turn>model\n'
                   f'<start_of_turn>think\n')
         prompts_eval += [prompt]
@@ -63,7 +63,7 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_diviso
     return tokens_train, train_loss_mask, tokens_eval, np.array(problems_eval), np.array(answers_eval)
 
 
-def benchmark_model(key, model, tokens, problems_eval, answers_eval, vocab, batch_size, n_eval_samples, pad_id=0):
+def benchmark_model(key, model, tokens, problems_eval, answers_eval, vocab, batch_size, n_eval_samples, pad_id=0, eot_id=106):
     key_decoding, key_questions = jax.random.split(key)
     mesh = model.in_embed.embedding.value.sharding.mesh
     n_batches = len(tokens) // batch_size
@@ -80,8 +80,8 @@ def benchmark_model(key, model, tokens, problems_eval, answers_eval, vocab, batc
                 problem = problems_eval[sample_idx]
                 gold = answers_eval[sample_idx]
                 parsed = parse(completion_text)
-                finished = pad_id in completion_tokens
-                correct = verify(gold, parsed)
+                finished = completion_tokens[-1] == eot_id
+                correct = verify(parse(gold), parsed)
                 lengths_list += [len(completion_tokens)]
                 finished_list += [finished]
                 correct_list += [correct]
