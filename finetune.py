@@ -59,7 +59,7 @@ def finetune(
     batch_size = 1,
     microbatch_size = 1,
     n_eval_samples = 30,
-    eval_batch_size = 15,
+    eval_batch_size = 16,
     log_every_steps = 1,
     train_seq_len = 9216,
     eval_seq_len = 32768,
@@ -67,9 +67,16 @@ def finetune(
     train_parallelism = 'seq', # ['seq', 'batch']
     logging = False,
     seed = 0,
+    **kwargs,
 ):
+    # check if any unrecognized arguments were passed
+    if len(kwargs) > 0: raise NameError(f'Unrecognized arguments: {kwargs}')
+
+    # get config
     train_config = locals()
-    if jax.process_index() == 0: print(f'{train_config=}')
+    if jax.process_index() == 0:
+        print(f'{train_config=}')
+        if logging: wandb.init(project='picodo-finetune', config=train_config)
 
     # load model
     n_tensor_devices = jax.device_count() // n_data_devices
@@ -93,10 +100,6 @@ def finetune(
     optimizer = nnx.Optimizer(model, tx)
     opt_graphdef, opt_state = nnx.split(optimizer)
     del model, optimizer
-
-    # start wandb
-    if logging and (jax.process_index() == 0):
-        wandb.init(project='picodo-finetune', config=train_config)
 
     # training loop
     step = 0
