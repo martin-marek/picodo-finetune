@@ -26,7 +26,7 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_diviso
     # load datasets
     ds_train = load_dataset('simplescaling/s1K-1.1', split='all') # ['question', 'solution', 'gemini_thinking_trajectory', 'gemini_attempt']
     ds_eval = load_dataset(f'HuggingFaceH4/{eval_ds_name}', split='all') # ['problem', 'answer']
-    
+
     # tokenize training dataset
     examples_train = []
     for i, example in enumerate(ds_train):
@@ -40,8 +40,8 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_diviso
         examples_train += [text]
     tokens_train = jnp.array(tokenize(examples_train, vocab, train_seq_len))
     sot_token = vocab.EncodeAsIds('<start_of_turn>')[0]
-    first_model_token = jnp.array([jnp.where(x==sot_token)[0][1] for x in tokens_train]) + 1
-    last_model_token = jnp.array([jnp.where(x==pad_id)[0][0] for x in tokens_train])
+    first_model_token = jnp.array([np.where(x==sot_token)[0][1] for x in tokens_train]) + 1
+    last_model_token = jnp.array([np.where(x==pad_id)[0][0] for x in tokens_train])
     train_loss_mask = (first_model_token[:, None] <= jnp.arange(train_seq_len)[None, :]) & (jnp.arange(train_seq_len)[None, :] <= last_model_token[:, None])  # [B, T]
     print(f'train dataset max. length: {jnp.argmax(tokens_train==0, axis=1).max()}')
 
