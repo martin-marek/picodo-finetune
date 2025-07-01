@@ -109,7 +109,6 @@ def finetune(
         for epoch in range(n_epochs):
 
             # train for 1 epoch
-            # assume that microbatch size always 1
             key, key_train = jax.random.split(key)
             idxs = jax.random.choice(key_train, n_train_samples, shape=[n_batches, grad_acc_steps, microbatch_size], replace=False)
             for idx in idxs:
