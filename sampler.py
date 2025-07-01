@@ -29,15 +29,15 @@ def _sample_top_p(key, probs, p=0.95):
     return next_token
 
 
-def _sample_step(state, model_graphdef, model_state, pbar, pad_id=0, temperature=1):
+def _sample_step(state, model_graphdef, model_state, pbar, temperature=1, pad_id=0, eot_id=106):
 
     # we pass model_state as non-static arg, to avoid compiling it
     model = nnx.merge(model_graphdef, model_state)
 
     # sample next token
     key, key_sampling = jax.random.split(state.key)
-    last_token = state.tokens[:, state.step, None] # [B, 1]
-    logits, kv_cache = model(last_token, state.kv_cache) # [B, 1, V]
+    input_token = state.tokens[:, state.step, None] # [B, 1]
+    logits, kv_cache = model(input_token, state.kv_cache) # [B, 1, V]
     probs = jax.nn.softmax(logits[:, 0, :] / temperature, axis=-1) # [B, V]
     sampled_token = _sample_top_p(key_sampling, probs)
 
@@ -47,7 +47,7 @@ def _sample_step(state, model_graphdef, model_state, pbar, pad_id=0, temperature
     tokens = state.tokens.at[:, state.step+1].set(update_token)
 
     # check if sampling is done
-    done = state.done | ((next_token==pad_id) & (sampled_token==pad_id))
+    done = state.done | ((next_token==pad_id) & (sampled_token==eot_id))
     jax.debug.callback(lambda: pbar.update(1) if jax.process_index() == 0 else None)
     
     return SamplingState(key, state.step+1, tokens, kv_cache, done)
@@ -67,7 +67,7 @@ def sample(key, model, tokens, pad_id=0):
 
     # sample next token inside a while loop
     pbar = tqdm(total=T, desc='Sampling') if (jax.process_index() == 0) else None
-    step_fn = lambda state: _sample_step(state, *nnx.split(model), pbar, pad_id)
+    step_fn = lambda state: _sample_step(state, *nnx.split(model), pbar)
     cond_fn = lambda state: (state.step < T) & jnp.any(~state.done)
     state = jax.lax.while_loop(cond_fn, step_fn, state)
     jax.effects_barrier()

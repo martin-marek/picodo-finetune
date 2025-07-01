@@ -34,7 +34,7 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_diviso
                 f'{example["question"]}<end_of_turn>\n'
                 f'<start_of_turn>model\n'
                 f'<start_of_turn>think\n'
-                f'{example["gemini_thinking_trajectory"]}<end_of_turn>\n'
+                f'{example["gemini_thinking_trajectory"]}\n'
                 f'<start_of_turn>answer\n'
                 f'{example["gemini_attempt"]}<end_of_turn>')
         examples_train += [text]
@@ -63,9 +63,8 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_diviso
     return tokens_train, train_loss_mask, tokens_eval, np.array(problems_eval), np.array(answers_eval)
 
 
-def benchmark_model(key, model, tokens, problems_eval, answers_eval, vocab, batch_size, n_eval_samples):
+def benchmark_model(key, model, tokens, problems_eval, answers_eval, vocab, batch_size, n_eval_samples, pad_id=0):
     key_decoding, key_questions = jax.random.split(key)
-    eot_token = vocab.EncodeAsIds('<end_of_turn>')[0]
     mesh = model.in_embed.embedding.value.sharding.mesh
     n_batches = len(tokens) // batch_size
     sample_idxs = jax.random.choice(key_questions, len(tokens), shape=[n_batches, batch_size], replace=False)
@@ -81,7 +80,7 @@ def benchmark_model(key, model, tokens, problems_eval, answers_eval, vocab, batc
                 problem = problems_eval[sample_idx]
                 gold = answers_eval[sample_idx]
                 parsed = parse(completion_text)
-                finished = eot_token in completion_tokens
+                finished = pad_id in completion_tokens
                 correct = verify(gold, parsed)
                 lengths_list += [len(completion_tokens)]
                 finished_list += [finished]
