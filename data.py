@@ -80,7 +80,7 @@ def benchmark_model(key, model, tokens, problems_eval, answers_eval, vocab, batc
                 problem = problems_eval[sample_idx]
                 gold = answers_eval[sample_idx]
                 parsed = parse(completion_text)
-                finished = completion_tokens[-1] == eot_id
+                finished = eot_id in completion_tokens
                 correct = verify(parse(gold), parsed)
                 lengths_list += [len(completion_tokens)]
                 finished_list += [finished]
