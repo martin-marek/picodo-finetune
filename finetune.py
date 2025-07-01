@@ -49,7 +49,7 @@ def train_step_grad_acc(opt_state, opt_graphdef, model_graphdef, tokens, loss_ma
 
 
 def finetune(
-    model_variant = 'gemma3-4b-it', # ['1b', '4b', '12b', '27b']
+    model_variant = 'gemma3-1b-it', # ['1b', '4b', '12b', '27b']
     eval_dataset = 'aime_2024', # ['aime_2024', 'MATH-500']
     use_lora = False,
     optimizer_name = 'adafactor', # ['adam', 'adafactor']
