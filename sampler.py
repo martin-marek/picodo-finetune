@@ -47,7 +47,7 @@ def _sample_step(state, model_graphdef, model_state, pbar, pad_id=0, temperature
     tokens = state.tokens.at[:, state.step+1].set(update_token)
 
     # check if sampling is done
-    done = state.done | (sampled_token==pad_id)
+    done = state.done | ((next_token==pad_id) & (sampled_token==pad_id))
     jax.debug.callback(lambda: pbar.update(1) if jax.process_index() == 0 else None)
     
     return SamplingState(key, state.step+1, tokens, kv_cache, done)
