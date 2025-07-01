@@ -3,16 +3,16 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import NamedSharding, PartitionSpec as P
+from itertools import chain
 from datasets import load_dataset
 from math_verify import parse, verify
 from sampler import sample
 
 
-def tokenize(sequences, vocab, seq_len, batch_divisor=1, pad_id=0):
+def tokenize(sequences, vocab, seq_len, pad_id=0):
     sequences_tokenized = vocab.EncodeAsIds(sequences)
     assert max(map(len, sequences_tokenized)) <= seq_len
     B, T = len(sequences), seq_len
-    B = int(batch_divisor * math.ceil(B / batch_divisor)) # round B up to be divisible by `batch_divisor`
     tokens = np.full([B, T], pad_id, dtype=jnp.int32)
     tokens[:, 0] = vocab.bos_id()
 
@@ -22,10 +22,11 @@ def tokenize(sequences, vocab, seq_len, batch_divisor=1, pad_id=0):
     return jnp.array(tokens, dtype=jnp.int32)
 
 
-def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_divisor=1, pad_id=0):
+def load_datasets(vocab, train_seq_len, eval_seq_len, pad_id=0):
     # load datasets
     ds_train = load_dataset('simplescaling/s1K-1.1', split='all') # ['question', 'solution', 'gemini_thinking_trajectory', 'gemini_attempt']
-    ds_eval = load_dataset(f'HuggingFaceH4/{eval_ds_name}', split='all') # ['problem', 'answer']
+    aime24 = load_dataset(f'HuggingFaceH4/aime_2024', split='all') # ['problem', 'answer']
+    aime25 = load_dataset(f'MathArena/aime_2025', split='all') # ['problem', 'answer']
 
     # tokenize training dataset
     examples_train = []
@@ -49,7 +50,7 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_diviso
     prompts_eval = []
     problems_eval = []
     answers_eval = []
-    for i, example in enumerate(ds_eval):
+    for i, example in enumerate(chain(aime24, aime25)):
         prompt = (f'<start_of_turn>user\n'
                   f'{example["problem"]} Hint: the answer is an integer between $0$ and $999$, inclusive.<end_of_turn>\n'
                   f'<start_of_turn>model\n'
@@ -57,17 +58,19 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, batch_diviso
         prompts_eval += [prompt]
         problems_eval += [example["problem"]]
         answers_eval += [example['answer']]
-    tokens_eval = tokenize(prompts_eval, vocab, eval_seq_len, batch_divisor)
+    tokens_eval = tokenize(prompts_eval, vocab, eval_seq_len)
     print(f'{tokens_eval.shape=}')
     
     return tokens_train, train_loss_mask, tokens_eval, np.array(problems_eval), np.array(answers_eval)
 
 
-def benchmark_model(key, model, tokens, problems_eval, answers_eval, vocab, batch_size, n_eval_samples, temperature=1, pad_id=0, eot_id=106):
+def benchmark_model(key, model, tokens, problems_eval, answers_eval, vocab, batch_size, n_eval_samples=None, temperature=1, pad_id=0, eot_id=106):
     key_decoding, key_questions = jax.random.split(key)
     mesh = model.in_embed.embedding.value.sharding.mesh
-    n_batches = len(tokens) // batch_size
-    sample_idxs = jax.random.choice(key_questions, len(tokens), shape=[n_batches, batch_size], replace=False)
+    if n_eval_samples is None: n_eval_samples = len(tokens)
+    n_batches = int(math.ceil(n_eval_samples / batch_size))
+    n_eval_samples = n_batches * batch_size
+    sample_idxs = jax.random.choice(key_questions, max(n_eval_samples, len(tokens)), shape=[n_batches, batch_size], replace=False)
     lengths_list = []
     correct_list = []
     finished_list = []

@@ -50,7 +50,6 @@ def train_step_grad_acc(opt_state, opt_graphdef, model_graphdef, tokens, loss_ma
 
 def finetune(
     model_variant = 'gemma3-1b-it-int4', # ['1b', '4b', '12b', '27b']
-    eval_dataset = 'aime_2024', # ['aime_2024', 'MATH-500']
     use_lora = False,
     optimizer_name = 'adafactor', # ['adam', 'adafactor']
     peak_lr = 1e-6,
@@ -58,8 +57,8 @@ def finetune(
     n_epochs = 0,
     batch_size = 1,
     microbatch_size = 1,
-    n_eval_samples = 30,
-    eval_batch_size = 16,
+    n_eval_samples = None,
+    eval_batch_size = 32,
     log_every_steps = 1,
     train_seq_len = 9216,
     eval_seq_len = 1024,
@@ -86,7 +85,7 @@ def finetune(
     model_graphdef = nnx.graphdef(model)
 
     # load datasets
-    tokens_train, train_loss_mask, tokens_eval, problems_eval, answers_eval = data.load_datasets(eval_dataset, vocab, train_seq_len, eval_seq_len, eval_batch_size)
+    tokens_train, train_loss_mask, tokens_eval, problems_eval, answers_eval = data.load_datasets(vocab, train_seq_len, eval_seq_len)
     print(f'{float(train_loss_mask.mean())=:.1%}')
     
     # optimizer
