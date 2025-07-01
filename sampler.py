@@ -28,7 +28,6 @@ def _sample_top_p(key, probs, p=0.95):
     return next_token
 
 
-#@partial(jax.jit, static_argnames=('model_graphdef'))
 def _sample_step(state, model_graphdef, model_state, pbar, pad_id=0, eot_id=106, temperature=1):
 
     # we pass model_state as non-static arg, to avoid compiling it
