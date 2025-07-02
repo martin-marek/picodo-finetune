@@ -53,8 +53,7 @@ def load_datasets(vocab, train_seq_len, eval_seq_len, pad_id=0):
     for i, example in enumerate(chain(aime24, aime25)):
         prompt = (f'<start_of_turn>user\n'
                   f'{example["problem"]} Hint: the answer is an integer between $0$ and $999$, inclusive.<end_of_turn>\n'
-                  f'<start_of_turn>model\n'
-                  f'<think>\n')
+                  f'<start_of_turn>model\n')
         prompts_eval += [prompt]
         problems_eval += [example["problem"]]
         answers_eval += [example['answer']]
