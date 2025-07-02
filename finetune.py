@@ -12,42 +12,6 @@ import gemma
 import data
 
 
-@partial(jax.jit, static_argnames=('model_graphdef'))
-def loss_fn(model_state, model_graphdef, x, loss_mask): # [B, T]
-    B, T = x.shape
-    model = nnx.merge(model_graphdef, model_state)
-    y = jnp.roll(x, -1, axis=1)
-    logits, _ = model(x) # [B, T, V]
-    losses = optax.softmax_cross_entropy_with_integer_labels(logits, y) # [B, T]
-    return (losses * loss_mask).sum() / loss_mask.sum()
-
-
-@partial(jax.jit, static_argnames=('opt_graphdef', 'model_graphdef'))
-def train_step(opt_state, opt_graphdef, model_graphdef, tokens, loss_mask):
-    loss, grads = jax.value_and_grad(loss_fn)(opt_state.model, model_graphdef, tokens, loss_mask)
-    optimizer = nnx.merge(opt_graphdef, opt_state)
-    optimizer.update(grads)
-    opt_state = nnx.state(optimizer)
-    return opt_state, loss
-
-
-@partial(jax.jit, static_argnames=('opt_graphdef', 'model_graphdef'))
-def train_step_grad_acc(opt_state, opt_graphdef, model_graphdef, tokens, loss_mask):
-    loss_mean = 0
-    grad_mean = otu.tree_zeros_like(opt_state.model)
-    def step_fn(i, args):
-        grad_mean, loss_mean = args
-        batch_loss, batch_grads = jax.value_and_grad(loss_fn)(opt_state.model, model_graphdef, tokens[i], loss_mask[i])
-        grad_mean = jax.tree.map(lambda m, g: (i*m + g) / (i+1), grad_mean, batch_grads)
-        loss_mean = (i*loss_mean + batch_loss) / (i+1)
-        return grad_mean, loss_mean
-    grad_mean, loss_mean = jax.lax.fori_loop(0, len(tokens), step_fn, (grad_mean, loss_mean))
-    optimizer = nnx.merge(opt_graphdef, opt_state)
-    optimizer.update(grad_mean)
-    opt_state = nnx.state(optimizer)
-    return opt_state, loss_mean
-
-
 def finetune(
     model_variant = 'gemma3-1b-it', # ['1b', '4b', '12b', '27b']
     eval_dataset = 'aime',
@@ -149,6 +113,42 @@ def finetune(
         if logging and (jax.process_index() == 0):
             wandb.log(eval_metrics, step)
             wandb.finish()
+
+
+@partial(jax.jit, static_argnames=('model_graphdef'))
+def loss_fn(model_state, model_graphdef, x, loss_mask): # [B, T]
+    B, T = x.shape
+    model = nnx.merge(model_graphdef, model_state)
+    y = jnp.roll(x, -1, axis=1)
+    logits, _ = model(x) # [B, T, V]
+    losses = optax.softmax_cross_entropy_with_integer_labels(logits, y) # [B, T]
+    return (losses * loss_mask).sum() / loss_mask.sum()
+
+
+@partial(jax.jit, static_argnames=('opt_graphdef', 'model_graphdef'))
+def train_step(opt_state, opt_graphdef, model_graphdef, tokens, loss_mask):
+    loss, grads = jax.value_and_grad(loss_fn)(opt_state.model, model_graphdef, tokens, loss_mask)
+    optimizer = nnx.merge(opt_graphdef, opt_state)
+    optimizer.update(grads)
+    opt_state = nnx.state(optimizer)
+    return opt_state, loss
+
+
+@partial(jax.jit, static_argnames=('opt_graphdef', 'model_graphdef'))
+def train_step_grad_acc(opt_state, opt_graphdef, model_graphdef, tokens, loss_mask):
+    loss_mean = 0
+    grad_mean = otu.tree_zeros_like(opt_state.model)
+    def step_fn(i, args):
+        grad_mean, loss_mean = args
+        batch_loss, batch_grads = jax.value_and_grad(loss_fn)(opt_state.model, model_graphdef, tokens[i], loss_mask[i])
+        grad_mean = jax.tree.map(lambda m, g: (i*m + g) / (i+1), grad_mean, batch_grads)
+        loss_mean = (i*loss_mean + batch_loss) / (i+1)
+        return grad_mean, loss_mean
+    grad_mean, loss_mean = jax.lax.fori_loop(0, len(tokens), step_fn, (grad_mean, loss_mean))
+    optimizer = nnx.merge(opt_graphdef, opt_state)
+    optimizer.update(grad_mean)
+    opt_state = nnx.state(optimizer)
+    return opt_state, loss_mean
 
 
 if __name__ == '__main__':
