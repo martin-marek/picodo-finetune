@@ -54,6 +54,7 @@ def finetune(
     use_lora = False,
     optimizer_name = 'adafactor', # ['adam', 'adafactor']
     peak_lr = 1e-6,
+    lr_schedule = 'const',
     b2 = 0.997,
     n_epochs = 0,
     batch_size = 1,
@@ -96,9 +97,10 @@ def finetune(
     grad_acc_steps = batch_size // microbatch_size
     n_optimizer_steps = n_epochs * n_batches
     warmup_steps = int(warmup_frac * n_optimizer_steps)
-    lr_schedule = optax.schedules.warmup_cosine_decay_schedule(0, peak_lr, warmup_steps, max(1, n_optimizer_steps))
-    if optimizer_name == 'adam': tx = optax.adam(lr_schedule, 0.9, b2)
-    if optimizer_name == 'adafactor': tx = optax.adafactor(lr_schedule, decay_rate=b2)
+    if lr_schedule == 'const': lr = peak_lr
+    if lr_schedule == 'cosine': lr = optax.schedules.warmup_cosine_decay_schedule(0, peak_lr, warmup_steps, max(1, n_optimizer_steps))
+    if optimizer_name == 'adam': tx = optax.adam(lr, 0.9, b2)
+    if optimizer_name == 'adafactor': tx = optax.adafactor(lr, decay_rate=b2)
     optimizer = nnx.Optimizer(model, tx)
     opt_graphdef, opt_state = nnx.split(optimizer)
     del model, optimizer
