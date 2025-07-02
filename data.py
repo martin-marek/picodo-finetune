@@ -3,7 +3,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import NamedSharding, PartitionSpec as P
-from itertools import chain
 from datasets import load_dataset
 from math_verify import parse, verify
 from sampler import sample
@@ -11,7 +10,7 @@ from sampler import sample
 
 def tokenize(sequences, vocab, seq_len, pad_id=0):
     sequences_tokenized = vocab.EncodeAsIds(sequences)
-    assert max(map(len, sequences_tokenized)) <= seq_len
+    assert (max_length := max(map(len, sequences_tokenized))) <= seq_len, f'{max_length=}'
     B, T = len(sequences), seq_len
     tokens = np.full([B, T], pad_id, dtype=jnp.int32)
     tokens[:, 0] = vocab.bos_id()
@@ -22,15 +21,20 @@ def tokenize(sequences, vocab, seq_len, pad_id=0):
     return jnp.array(tokens, dtype=jnp.int32)
 
 
-def load_datasets(vocab, train_seq_len, eval_seq_len, pad_id=0):
+def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, pad_id=0):
     # load datasets
     ds_train = load_dataset('simplescaling/s1K-1.1', split='all') # ['question', 'solution', 'gemini_thinking_trajectory', 'gemini_attempt']
-    aime24 = load_dataset(f'HuggingFaceH4/aime_2024', split='all') # ['problem', 'answer']
-    aime25 = load_dataset(f'MathArena/aime_2025', split='all') # ['problem', 'answer']
+    if eval_ds_name == 'aime':
+        eval_datasets = [
+            load_dataset(f'HuggingFaceH4/aime_2024', split='all'), # ['problem', 'answer']
+            load_dataset(f'MathArena/aime_2025', split='all'), # ['problem', 'answer']
+        ]
+    if eval_ds_name == 'math500':
+        eval_datasets = [load_dataset(f'HuggingFaceH4/MATH-500', split='all')]  # ['problem', 'answer']
 
     # tokenize training dataset
     examples_train = []
-    for i, example in enumerate(ds_train):
+    for example in ds_train:
         text = (f'<start_of_turn>user\n'
                 f'{example["question"]}<end_of_turn>\n'
                 f'<start_of_turn>model\n'
@@ -50,13 +54,16 @@ def load_datasets(vocab, train_seq_len, eval_seq_len, pad_id=0):
     prompts_eval = []
     problems_eval = []
     answers_eval = []
-    for i, example in enumerate(chain(aime24, aime25)):
-        prompt = (f'<start_of_turn>user\n'
-                  f'{example["problem"]} Hint: the answer is an integer between $0$ and $999$, inclusive.<end_of_turn>\n'
-                  f'<start_of_turn>model\n')
-        prompts_eval += [prompt]
-        problems_eval += [example["problem"]]
-        answers_eval += [example['answer']]
+    for eval_dataset in eval_datasets:
+        for example in eval_dataset:
+            problem = example["problem"]
+            if eval_ds_name == 'aime': problem += ' Hint: the answer is an integer between $0$ and $999$, inclusive.'
+            prompt = (f'<start_of_turn>user\n'
+                      f'{problem}<end_of_turn>\n'
+                      f'<start_of_turn>model\n')
+            prompts_eval += [prompt]
+            problems_eval += [problem]
+            answers_eval += [example['answer']]
     tokens_eval = tokenize(prompts_eval, vocab, eval_seq_len)
     print(f'{tokens_eval.shape=}')
     
