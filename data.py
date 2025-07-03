@@ -8,23 +8,20 @@ from math_verify import parse, verify
 from sampler import sample
 
 
-def tokenize(sequences, vocab, seq_len, pad_id=0):
+def tokenize(sequences, vocab, seq_len, add_eos=False):
     sequences_tokenized = vocab.EncodeAsIds(sequences)
-    within_seq_length = [len(seq) <= seq_len for seq in sequences_tokenized]
-    sequences_tokenized = [seq for seq, keep in zip(sequences_tokenized, within_seq_length) if keep]
-    print(f'fraction within seq. length: {np.mean(within_seq_length):.1%}')
-    B, T = len(sequences_tokenized), seq_len
-    print(f'{B=}, {T=}')
-    tokens = np.full([B, T], pad_id, dtype=jnp.int32)
+    eos_id = vocab.eos_id()
+    tokens = np.full([len(sequences), seq_len], vocab.pad_id(), dtype=jnp.int32)
     tokens[:, 0] = vocab.bos_id()
     for i, seq_tok in enumerate(sequences_tokenized):
-        tokens[i, 1:1+len(seq_tok)] = seq_tok
+        if add_eos: seq_tok += [eos_id]
+        tokens[i, 1:1+len(seq_tok)] = seq_tok[:seq_len-1]
     return jnp.array(tokens, dtype=jnp.int32)
 
 
 def load_datasets(vocab, seq_len=1024):
-    sot_token = vocab.EncodeAsIds('<start_of_turn>')[0]
-    eot_token = vocab.EncodeAsIds('<end_of_turn>')[0]
+    pad_id = vocab.pad_id()
+    eos_id = vocab.eos_id()
 
     # load MATH dataset
     print('loading datasets…')
@@ -35,17 +32,21 @@ def load_datasets(vocab, seq_len=1024):
 
     # tokenize training dataset
     print('tokenizing training dataset…')
+    prompts_train = []
     examples_train = []
     for example in ds_train:
-        text = (f'<start_of_turn>user\n'
-                f'{example["problem"]}<end_of_turn>\n'
-                f'<start_of_turn>model\n'
-                f'{example["solution"]}<end_of_turn>')
-        examples_train += [text]
-    tokens_train = jnp.array(tokenize(examples_train, vocab, seq_len))
-    first_model_token = jnp.array([np.where(x==sot_token)[0][1] for x in tokens_train]) + 1
-    last_model_token = jnp.array([np.where(x==eot_token)[0][1] for x in tokens_train])
-    train_loss_mask = (first_model_token[:, None] <= jnp.arange(seq_len)[None, :]) & (jnp.arange(seq_len)[None, :] <= last_model_token[:, None])  # [B, T]
+        prompt = f'Problem: {example["problem"]}\nSolution: '
+        solution = f'{example["solution"]}'
+        prompts_train += [prompt]
+        examples_train += [prompt+solution]
+    prompts_tokenized_train = tokenize(prompts_train, vocab, seq_len)
+    examples_tokenized_train = tokenize(examples_train, vocab, seq_len, add_eos=True)
+    within_seq_length = examples_tokenized_train[:, -1] == pad_id
+    prompts_tokenized_train, examples_tokenized_train = prompts_tokenized_train[within_seq_length], examples_tokenized_train[within_seq_length]
+    print(f'fraction within seq. length: {within_seq_length.mean():.1%}')
+    first_solution_token = jnp.argmax(prompts_tokenized_train == pad_id, axis=1) - 1 # [B]
+    last_solution_token = jnp.argmax(examples_tokenized_train == eos_id, axis=1) - 1 # [B]
+    train_loss_mask = (first_solution_token[:, None] <= jnp.arange(seq_len)[None, :]) & (jnp.arange(seq_len)[None, :] <= last_solution_token[:, None])  # [B, T]
     print(f'{float(train_loss_mask.mean())=:.1%}')
 
     # tokenize eval dataset
@@ -54,18 +55,17 @@ def load_datasets(vocab, seq_len=1024):
     problems_eval = []
     solutions_eval = []
     for example in ds_valid:
-        prompt = (f'<start_of_turn>user\n'
-                  f'{example["problem"]}<end_of_turn>\n'
-                  f'<start_of_turn>model\n')
-        prompts_eval += [prompt]
+        prompts_eval += [f'Problem: {example["problem"]}\nSolution: ']
         problems_eval += [example['problem']]
         solutions_eval += [example['solution']]
-    tokens_eval = tokenize(prompts_eval, vocab, seq_len)
+    problems_tokenized_eval = tokenize(prompts_eval, vocab, seq_len)
     
-    return tokens_train, train_loss_mask, tokens_eval, np.array(problems_eval), np.array(solutions_eval)
+    return examples_tokenized_train, train_loss_mask, problems_tokenized_eval, np.array(problems_eval), np.array(solutions_eval)
 
 
-def benchmark_model(key, model, tokens, problems_eval, solutions_eval, vocab, batch_size, n_eval_samples=None, temperature=1, pad_id=0, eot_id=106):
+def benchmark_model(key, model, tokens, problems_eval, solutions_eval, vocab, batch_size, n_eval_samples=None, temperature=1):
+    pad_id = vocab.pad_id()
+    eos_id = vocab.eos_id()
     key_decoding, key_questions = jax.random.split(key)
     mesh = model.in_embed.embedding.value.sharding.mesh
     if n_eval_samples is None: n_eval_samples = len(tokens)
@@ -84,7 +84,7 @@ def benchmark_model(key, model, tokens, problems_eval, solutions_eval, vocab, ba
                 problem = problems_eval[sample_idx]
                 gold = solutions_eval[sample_idx]
                 parsed = parse(completion_text)
-                finished = eot_id in completion_tokens
+                finished = eos_id in completion_tokens
                 correct = verify(parse(gold), parsed)
                 lengths_list += [len(completion_tokens)]
                 finished_list += [finished]
