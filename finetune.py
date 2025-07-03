@@ -13,24 +13,21 @@ import data
 
 
 def finetune(
-    model_variant = 'gemma3-1b-it', # ['1b', '4b', '12b', '27b']
-    teacher = 'deepseek', # ['gemini', 'deepseek']
-    eval_dataset = 'aime',
+    model_variant = 'gemma3-1b', # ['1b', '4b', '12b', '27b']
     use_lora = False,
-    optimizer_name = 'adafactor', # ['adam', 'adafactor']
+    optimizer_name = 'adam', # ['adam', 'adafactor']
     peak_lr = 1e-6,
     lr_schedule = 'const',
-    b2 = 0.997,
+    b2 = 0.9999,
     n_epochs = 0,
     batch_size = 1,
     microbatch_size = 1,
-    n_eval_samples = None,
-    eval_batch_size = 32,
-    eval_seq_len = 1024,
+    n_eval_samples = 128,
+    eval_batch_size = 128,
     n_data_devices = 1,
     train_parallelism = 'seq', # ['seq', 'batch']
     temperature = 1,
-    log_every_steps = 1,
+    log_every_steps = 100,
     logging = False,
     seed = 0,
     **kwargs,
@@ -45,15 +42,14 @@ def finetune(
         if logging: wandb.init(project='picodo-finetune', config=train_config)
 
     # load model
+    print('loading model…')
     n_tensor_devices = jax.device_count() // n_data_devices
     mesh = jax.make_mesh((n_data_devices, n_tensor_devices), ('data', 'model'))
     model, vocab = gemma.load_pretrained(model_variant, mesh)
     model_graphdef = nnx.graphdef(model)
 
     # load datasets
-    force_think = n_epochs > 0
-    tokens_train, train_loss_mask, tokens_eval, problems_eval, answers_eval = data.load_datasets(teacher, eval_dataset, vocab, eval_seq_len, force_think)
-    print(f'{float(train_loss_mask.mean())=:.1%}')
+    tokens_train, train_loss_mask, tokens_eval, problems_eval, solutions_eval = data.load_datasets(vocab)
     
     # optimizer
     warmup_frac = 0.05
@@ -110,7 +106,7 @@ def finetune(
         # eval
         model = nnx.merge(model_graphdef, opt_state.model)
         del opt_state
-        eval_metrics = data.benchmark_model(key_eval, model, tokens_eval, problems_eval, answers_eval, vocab, eval_batch_size, n_eval_samples, temperature)
+        eval_metrics = data.benchmark_model(key_eval, model, tokens_eval, problems_eval, solutions_eval, vocab, eval_batch_size, n_eval_samples, temperature)
         if logging and (jax.process_index() == 0):
             wandb.log(eval_metrics, step)
             wandb.finish()
