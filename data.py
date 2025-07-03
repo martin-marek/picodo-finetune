@@ -21,7 +21,7 @@ def tokenize(sequences, vocab, seq_len, pad_id=0):
     return jnp.array(tokens, dtype=jnp.int32)
 
 
-def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, pad_id=0):
+def load_datasets(teacher, eval_ds_name, vocab, eval_seq_len, force_think, pad_id=0):
     # load datasets
     ds_train = load_dataset('simplescaling/s1K-1.1', split='all') # ['question', 'solution', 'gemini_thinking_trajectory', 'gemini_attempt']
     if eval_ds_name == 'aime':
@@ -33,15 +33,20 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, pad_id=0):
         eval_datasets = [load_dataset(f'HuggingFaceH4/MATH-500', split='all')]  # ['problem', 'answer']
 
     # tokenize training dataset
+    if teacher == 'gemini': train_seq_len = 9216
+    if teacher == 'deepseek': train_seq_len = 28672
     examples_train = []
     for example in ds_train:
+        question = example['question']
+        thinking_trajectory = example[f'{teacher}_thinking_trajectory']
+        attempt = example[f'{teacher}_attempt']
         text = (f'<start_of_turn>user\n'
-                f'{example["question"]}<end_of_turn>\n'
+                f'{question}<end_of_turn>\n'
                 f'<start_of_turn>model\n'
                 f'<think>\n'
-                f'{example["gemini_thinking_trajectory"]}\n'
+                f'{thinking_trajectory}\n'
                 f'<\\think>\n'
-                f'{example["gemini_attempt"]}<end_of_turn>')
+                f'{attempt}<end_of_turn>')
         examples_train += [text]
     tokens_train = jnp.array(tokenize(examples_train, vocab, train_seq_len))
     sot_token = vocab.EncodeAsIds('<start_of_turn>')[0]
@@ -61,6 +66,7 @@ def load_datasets(eval_ds_name, vocab, train_seq_len, eval_seq_len, pad_id=0):
             prompt = (f'<start_of_turn>user\n'
                       f'{problem}<end_of_turn>\n'
                       f'<start_of_turn>model\n')
+            if force_think: prompt += f'<think>\n'
             prompts_eval += [prompt]
             problems_eval += [problem]
             answers_eval += [example['answer']]

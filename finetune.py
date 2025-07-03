@@ -14,6 +14,7 @@ import data
 
 def finetune(
     model_variant = 'gemma3-1b-it', # ['1b', '4b', '12b', '27b']
+    teacher = 'deepseek', # ['gemini', 'deepseek']
     eval_dataset = 'aime',
     use_lora = False,
     optimizer_name = 'adafactor', # ['adam', 'adafactor']
@@ -25,7 +26,6 @@ def finetune(
     microbatch_size = 1,
     n_eval_samples = None,
     eval_batch_size = 32,
-    train_seq_len = 9216,
     eval_seq_len = 1024,
     n_data_devices = 1,
     train_parallelism = 'seq', # ['seq', 'batch']
@@ -51,7 +51,8 @@ def finetune(
     model_graphdef = nnx.graphdef(model)
 
     # load datasets
-    tokens_train, train_loss_mask, tokens_eval, problems_eval, answers_eval = data.load_datasets(eval_dataset, vocab, train_seq_len, eval_seq_len)
+    force_think = n_epochs > 0
+    tokens_train, train_loss_mask, tokens_eval, problems_eval, answers_eval = data.load_datasets(teacher, eval_dataset, vocab, eval_seq_len, force_think)
     print(f'{float(train_loss_mask.mean())=:.1%}')
     
     # optimizer
