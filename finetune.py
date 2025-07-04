@@ -19,7 +19,7 @@ def finetune(
     optimizer_name = 'adam', # ['adam', 'adafactor']
     peak_lr = 1e-6,
     lr_schedule = 'const',
-    b2 = 0.9999,
+    b2 = 0.997,
     n_epochs = 1,
     batch_size = 1,
     microbatch_size = 1,
@@ -104,8 +104,10 @@ def finetune(
                 loss_mask_batch = jax.device_put(train_loss_mask[idx], NamedSharding(mesh, train_data_pspec)) # [grad_acc_steps, microbatch_size, seq_len]
                 
                 # training step
-                if grad_acc_steps == 1: opt_state, batch_loss = train_step(optimizer, tokens_batch[0], loss_mask_batch[0], use_lora)
-                else: opt_state, batch_loss = train_step_grad_acc(optimizer, tokens_batch, loss_mask_batch, use_lora)
+                if grad_acc_steps == 1:
+                    optimizer, batch_loss = train_step(optimizer, tokens_batch[0], loss_mask_batch[0], use_lora)
+                else:
+                    optimizer, batch_loss = train_step_grad_acc(optimizer, tokens_batch, loss_mask_batch, use_lora)
                     
                 # logging
                 train_loss += batch_loss
@@ -120,7 +122,6 @@ def finetune(
         if (n_epochs > 0) and (jax.process_index() == 0): pbar.close()
         
         # eval
-        del opt_state
         eval_metrics = data.benchmark_model(key_eval, optimizer.model, tokens_eval, problems_eval, solutions_eval, vocab, eval_batch_size, n_eval_samples, temperature)
         if logging and (jax.process_index() == 0):
             wandb.log(eval_metrics, step)
@@ -141,15 +142,14 @@ def train_step(optimizer, tokens, loss_mask, lora=False):
     argnums = nnx.DiffState(0, nnx.LoRAParam) if lora else 0
     loss, grads = nnx.value_and_grad(loss_fn, argnums=argnums)(optimizer.model, tokens, loss_mask)
     optimizer.update(grads)
-    opt_state = nnx.state(optimizer)
-    return opt_state, loss
+    return optimizer, loss
 
 
 @partial(nnx.jit, static_argnames=('lora'))
 def train_step_grad_acc(optimizer, tokens, loss_mask, lora=False):
     argnums = nnx.DiffState(0, nnx.LoRAParam) if lora else 0
     loss_mean = 0
-    grad_mean = otu.tree_zeros_like(opt_state.model)
+    grad_mean = otu.tree_zeros_like(nnx.state(optimizer.model))
     def step_fn(i, args):
         grad_mean, loss_mean = args
         batch_loss, batch_grads = nnx.value_and_grad(loss_fn, argnums=argnums)(optimizer.model, tokens[i], loss_mask[i])
@@ -158,8 +158,7 @@ def train_step_grad_acc(optimizer, tokens, loss_mask, lora=False):
         return grad_mean, loss_mean
     grad_mean, loss_mean = jax.lax.fori_loop(0, len(tokens), step_fn, (grad_mean, loss_mean))
     optimizer.update(grad_mean)
-    opt_state = nnx.state(optimizer)
-    return opt_state, loss_mean
+    return optimizer, loss_mean
 
 
 if __name__ == '__main__':
