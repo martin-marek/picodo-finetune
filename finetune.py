@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 import optax
 import wandb
+import qwix
 from flax import nnx
 from tqdm.auto import tqdm
 from functools import partial
@@ -14,12 +15,12 @@ import data
 
 def finetune(
     model_variant = 'gemma3-1b', # ['1b', '4b', '12b', '27b']
-    use_lora = False,
+    lora_rank = None,
     optimizer_name = 'adam', # ['adam', 'adafactor']
     peak_lr = 1e-6,
     lr_schedule = 'const',
     b2 = 0.9999,
-    n_epochs = 0,
+    n_epochs = 1,
     batch_size = 1,
     microbatch_size = 1,
     n_eval_samples = 128,
@@ -29,6 +30,7 @@ def finetune(
     temperature = 1,
     log_every_steps = 100,
     logging = False,
+    remat = False,
     seed = 0,
     **kwargs,
 ):
@@ -46,7 +48,16 @@ def finetune(
     n_tensor_devices = jax.device_count() // n_data_devices
     mesh = jax.make_mesh((n_data_devices, n_tensor_devices), ('data', 'model'))
     model, vocab = gemma.load_pretrained(model_variant, mesh)
-    model_graphdef = nnx.graphdef(model)
+
+    # use lora for all layers except normalization layers
+    use_lora = lora_rank is not None
+    if use_lora:
+        lora_provider = qwix.lora.LoraProvider(module_path='^((?!scale).)*$', rank=lora_rank, alpha=2)
+        dummy_input = jnp.ones([1, 128], dtype=jnp.int32)
+        model = qwix.lora.apply_lora_to_model(model, lora_provider, dummy_input)
+
+    # enable gradient chekpointing (currently doesn't work with Lora)
+    if remat: model.layers = [jax.remat(layer) for layer in model.layers]
 
     # load datasets
     tokens_train, train_loss_mask, tokens_eval, problems_eval, solutions_eval = data.load_datasets(vocab)
@@ -62,15 +73,20 @@ def finetune(
     if lr_schedule == 'cosine': lr = optax.schedules.warmup_cosine_decay_schedule(0, peak_lr, warmup_steps, max(1, n_optimizer_steps))
     if optimizer_name == 'adam': tx = optax.adam(lr, 0.9, b2)
     if optimizer_name == 'adafactor': tx = optax.adafactor(lr, decay_rate=b2)
-    optimizer = nnx.Optimizer(model, tx)
-    opt_graphdef, opt_state = nnx.split(optimizer)
-    del model, optimizer
+    optimizer = nnx.Optimizer(model, tx, wrt=nnx.LoRAParam) if use_lora else nnx.Optimizer(model, tx)
+    
+    # pring number of parameters
+    n_model_params = jax.tree.reduce(lambda x, y: x + jnp.size(y), nnx.state(model), 0)
+    n_opt_params = jax.tree.reduce(lambda x, y: x + jnp.size(y), nnx.state(optimizer.opt_state), 0)
+    print(f'{n_model_params=:_}')
+    print(f'{n_opt_params=:_}')
 
     # training loop
     step = 0
     train_loss = 0
     key = jax.random.PRNGKey(seed)
     key, key_eval = jax.random.split(key)
+    del model
     with mesh:
         # iterate over epochs
         if ((n_epochs > 0) and (jax.process_index() == 0)): pbar = tqdm(total=n_optimizer_steps, desc='Training')
@@ -88,8 +104,8 @@ def finetune(
                 loss_mask_batch = jax.device_put(train_loss_mask[idx], NamedSharding(mesh, train_data_pspec)) # [grad_acc_steps, microbatch_size, seq_len]
                 
                 # training step
-                if grad_acc_steps == 1: opt_state, batch_loss = train_step(opt_state, opt_graphdef, model_graphdef, tokens_batch[0], loss_mask_batch[0])
-                else: opt_state, batch_loss = train_step_grad_acc(opt_state, opt_graphdef, model_graphdef, tokens_batch, loss_mask_batch)
+                if grad_acc_steps == 1: opt_state, batch_loss = train_step(optimizer, tokens_batch[0], loss_mask_batch[0], use_lora)
+                else: opt_state, batch_loss = train_step_grad_acc(optimizer, tokens_batch, loss_mask_batch, use_lora)
                     
                 # logging
                 train_loss += batch_loss
@@ -104,45 +120,43 @@ def finetune(
         if (n_epochs > 0) and (jax.process_index() == 0): pbar.close()
         
         # eval
-        model = nnx.merge(model_graphdef, opt_state.model)
         del opt_state
-        eval_metrics = data.benchmark_model(key_eval, model, tokens_eval, problems_eval, solutions_eval, vocab, eval_batch_size, n_eval_samples, temperature)
+        eval_metrics = data.benchmark_model(key_eval, optimizer.model, tokens_eval, problems_eval, solutions_eval, vocab, eval_batch_size, n_eval_samples, temperature)
         if logging and (jax.process_index() == 0):
             wandb.log(eval_metrics, step)
             wandb.finish()
 
 
-@partial(jax.jit, static_argnames=('model_graphdef'))
-def loss_fn(model_state, model_graphdef, x, loss_mask): # [B, T]
+@partial(nnx.jit)
+def loss_fn(model, x, loss_mask): # [B, T]
     B, T = x.shape
-    model = nnx.merge(model_graphdef, model_state)
     y = jnp.roll(x, -1, axis=1)
     logits, _ = model(x) # [B, T, V]
     losses = optax.softmax_cross_entropy_with_integer_labels(logits, y) # [B, T]
     return (losses * loss_mask).sum() / loss_mask.sum()
 
 
-@partial(jax.jit, static_argnames=('opt_graphdef', 'model_graphdef'))
-def train_step(opt_state, opt_graphdef, model_graphdef, tokens, loss_mask):
-    loss, grads = jax.value_and_grad(loss_fn)(opt_state.model, model_graphdef, tokens, loss_mask)
-    optimizer = nnx.merge(opt_graphdef, opt_state)
+@partial(nnx.jit, static_argnames=('lora'))
+def train_step(optimizer, tokens, loss_mask, lora=False):
+    argnums = nnx.DiffState(0, nnx.LoRAParam) if lora else 0
+    loss, grads = nnx.value_and_grad(loss_fn, argnums=argnums)(optimizer.model, tokens, loss_mask)
     optimizer.update(grads)
     opt_state = nnx.state(optimizer)
     return opt_state, loss
 
 
-@partial(jax.jit, static_argnames=('opt_graphdef', 'model_graphdef'))
-def train_step_grad_acc(opt_state, opt_graphdef, model_graphdef, tokens, loss_mask):
+@partial(nnx.jit, static_argnames=('lora'))
+def train_step_grad_acc(optimizer, tokens, loss_mask, lora=False):
+    argnums = nnx.DiffState(0, nnx.LoRAParam) if lora else 0
     loss_mean = 0
     grad_mean = otu.tree_zeros_like(opt_state.model)
     def step_fn(i, args):
         grad_mean, loss_mean = args
-        batch_loss, batch_grads = jax.value_and_grad(loss_fn)(opt_state.model, model_graphdef, tokens[i], loss_mask[i])
+        batch_loss, batch_grads = nnx.value_and_grad(loss_fn, argnums=argnums)(optimizer.model, tokens[i], loss_mask[i])
         grad_mean = jax.tree.map(lambda m, g: (i*m + g) / (i+1), grad_mean, batch_grads)
         loss_mean = (i*loss_mean + batch_loss) / (i+1)
         return grad_mean, loss_mean
     grad_mean, loss_mean = jax.lax.fori_loop(0, len(tokens), step_fn, (grad_mean, loss_mean))
-    optimizer = nnx.merge(opt_graphdef, opt_state)
     optimizer.update(grad_mean)
     opt_state = nnx.state(optimizer)
     return opt_state, loss_mean

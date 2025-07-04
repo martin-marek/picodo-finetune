@@ -117,7 +117,7 @@ class Gemma(nnx.Module):
         x = self.in_embed(tokens) * jnp.sqrt(D) # [B, T, D]
 
         for i, layer in enumerate(self.layers):
-            x, kv_cache[i] = jax.remat(layer)(x, kv_cache.get(i)) # [B, T, D]
+            x, kv_cache[i] = layer(x, kv_cache.get(i)) # [B, T, D]
         
         x = self.final_norm(x)
         logits = jnp.dot(x, self.out_embed.embedding.value.T) # [B, T, V]
