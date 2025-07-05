@@ -60,11 +60,11 @@ def finetune(
     if remat: model.layers = [jax.remat(layer) for layer in model.layers]
 
     # load datasets
-    tokens_train, train_loss_mask, tokens_eval, problems_eval, solutions_eval = data.load_datasets(vocab)
+    train_tokens, train_pos, train_attn_mask, train_loss_mask, tokens_eval, problems_eval, solutions_eval = data.load_datasets(vocab)
     
     # optimizer
     warmup_frac = 0.05
-    n_train_samples = len(tokens_train)
+    n_train_samples = len(train_tokens)
     n_batches = n_train_samples // batch_size
     grad_acc_steps = batch_size // microbatch_size
     n_optimizer_steps = n_epochs * n_batches
@@ -97,17 +97,23 @@ def finetune(
             idxs = jax.random.choice(key_train, n_train_samples, shape=[n_batches, grad_acc_steps, microbatch_size], replace=False)
             for idx in idxs:
 
-                # load batch
-                if train_parallelism == 'seq': train_data_pspec = P(None, None, 'data') # [grad_acc_steps, microbatch_size, seq_len]
-                if train_parallelism == 'batch': train_data_pspec = P(None, 'data', None) # [grad_acc_steps, microbatch_size, seq_len]
-                tokens_batch = jax.device_put(tokens_train[idx], NamedSharding(mesh, train_data_pspec)) # [grad_acc_steps, microbatch_size, seq_len]
-                loss_mask_batch = jax.device_put(train_loss_mask[idx], NamedSharding(mesh, train_data_pspec)) # [grad_acc_steps, microbatch_size, seq_len]
+                # shard batch
+                if train_parallelism == 'seq':
+                    tokens_batch = jax.device_put(train_tokens[idx], NamedSharding(mesh, P(None, None, 'data'))) # [grad_acc_steps, microbatch_size, seq_len]
+                    pos_batch = jax.device_put(train_tokens[idx], NamedSharding(mesh, P(None, None, 'data'))) # [grad_acc_steps, microbatch_size, seq_len]
+                    loss_mask_batch = jax.device_put(train_loss_mask[idx], NamedSharding(mesh, P(None, None, 'data'))) # [grad_acc_steps, microbatch_size, seq_len]
+                    attn_mask_batch = jax.device_put(train_attn_mask[idx], NamedSharding(mesh, P(None, None, None, None))) # [grad_acc_steps, microbatch_size, seq_len, seq_len]
+                if train_parallelism == 'batch':
+                    tokens_batch = jax.device_put(train_tokens[idx], NamedSharding(mesh, P(None, 'data', None))) # [grad_acc_steps, microbatch_size, seq_len]
+                    pos_batch = jax.device_put(train_tokens[idx], NamedSharding(mesh, P(None, 'data', None))) # [grad_acc_steps, microbatch_size, seq_len]
+                    loss_mask_batch = jax.device_put(train_loss_mask[idx], NamedSharding(mesh, P(None, 'data', None))) # [grad_acc_steps, microbatch_size, seq_len]
+                    attn_mask_batch = jax.device_put(train_attn_mask[idx], NamedSharding(mesh, P(None, 'data', None, None))) # [grad_acc_steps, microbatch_size, seq_len, seq_len]
                 
                 # training step
                 if grad_acc_steps == 1:
-                    optimizer, batch_loss = train_step(optimizer, tokens_batch[0], loss_mask_batch[0], use_lora)
+                    optimizer, batch_loss = train_step(optimizer, tokens_batch[0], pos_batch[0], attn_mask_batch[0], loss_mask_batch[0], use_lora)
                 else:
-                    optimizer, batch_loss = train_step_grad_acc(optimizer, tokens_batch, loss_mask_batch, use_lora)
+                    optimizer, batch_loss = train_step_grad_acc(optimizer, tokens_batch, pos_batch, attn_mask_batch, loss_mask_batch, use_lora)
                     
                 # logging
                 train_loss += batch_loss
@@ -129,24 +135,24 @@ def finetune(
 
 
 @partial(nnx.jit)
-def loss_fn(model, x, loss_mask): # [B, T]
+def loss_fn(model, x, pos, attn_mask, loss_mask): # [B, T]
     B, T = x.shape
     y = jnp.roll(x, -1, axis=1)
-    logits, _ = model(x) # [B, T, V]
+    logits, _ = model(x, positions=pos, attn_mask=attn_mask) # [B, T, V]
     losses = optax.softmax_cross_entropy_with_integer_labels(logits, y) # [B, T]
     return (losses * loss_mask).sum() / loss_mask.sum()
 
 
 @partial(nnx.jit, static_argnames=('lora'))
-def train_step(optimizer, tokens, loss_mask, lora=False):
+def train_step(optimizer, tokens, pos, attn_mask, loss_mask, lora=False):
     argnums = nnx.DiffState(0, nnx.LoRAParam) if lora else 0
-    loss, grads = nnx.value_and_grad(loss_fn, argnums=argnums)(optimizer.model, tokens, loss_mask)
+    loss, grads = nnx.value_and_grad(loss_fn, argnums=argnums)(optimizer.model, tokens, pos, attn_mask, loss_mask)
     optimizer.update(grads)
     return optimizer, loss
 
 
 @partial(nnx.jit, static_argnames=('lora'))
-def train_step_grad_acc(optimizer, tokens, loss_mask, lora=False):
+def train_step_grad_acc(optimizer, tokens_batch, tokens, pos, attn_mask, loss_mask, lora=False):
     argnums = nnx.DiffState(0, nnx.LoRAParam) if lora else 0
     model_graphdef, model_state = nnx.split(optimizer.model)
     loss_mean = 0
@@ -154,7 +160,7 @@ def train_step_grad_acc(optimizer, tokens, loss_mask, lora=False):
     def step_fn(i, args):
         grad_mean, loss_mean = args
         model = nnx.merge(model_graphdef, model_state)
-        batch_loss, batch_grads = nnx.value_and_grad(loss_fn, argnums=argnums)(model, tokens[i], loss_mask[i])
+        batch_loss, batch_grads = nnx.value_and_grad(loss_fn, argnums=argnums)(model, tokens[i], pos[i], attn_mask[i], loss_mask[i])
         grad_mean = jax.tree.map(lambda m, g: (i*m + g) / (i+1), grad_mean, batch_grads)
         loss_mean = (i*loss_mean + batch_loss) / (i+1)
         return grad_mean, loss_mean

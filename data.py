@@ -2,65 +2,85 @@ import math
 import jax
 import jax.numpy as jnp
 import numpy as np
+import datasets
 from jax.sharding import NamedSharding, PartitionSpec as P
-from datasets import load_dataset, get_dataset_config_names, concatenate_datasets
 from math_verify import parse, verify
 from sampler import sample
 
 
-def tokenize(sequences, vocab, seq_len, add_eos=False):
-    sequences_tokenized = vocab.EncodeAsIds(sequences)
-    eos_id = vocab.eos_id()
-    tokens = np.full([len(sequences), seq_len], vocab.pad_id(), dtype=jnp.int32)
-    tokens[:, 0] = vocab.bos_id()
-    for i, seq_tok in enumerate(sequences_tokenized):
-        if add_eos: seq_tok += [eos_id]
-        tokens[i, 1:1+len(seq_tok)] = seq_tok[:seq_len-1]
-    return jnp.array(tokens, dtype=jnp.int32)
-
-
 def load_datasets(vocab, seq_len=1024):
     pad_id = vocab.pad_id()
+    bos_id = vocab.bos_id()
     eos_id = vocab.eos_id()
 
     # load MATH dataset
     print('loading datasets…')
     ds_name = 'EleutherAI/hendrycks_math'
-    configs = get_dataset_config_names(ds_name) # ['algebra', 'counting_and_probability', 'geometry', 'intermediate_algebra', 'number_theory', 'prealgebra', 'precalculus']
-    ds_train = concatenate_datasets([load_dataset(ds_name, config, split='train') for config in configs]) # ['problem', 'solution']
-    ds_valid = concatenate_datasets([load_dataset(ds_name, config, split='test') for config in configs]) # ['problem', 'solution']
+    configs = datasets.get_dataset_config_names(ds_name) # ['algebra', 'counting_and_probability', 'geometry', 'intermediate_algebra', 'number_theory', 'prealgebra', 'precalculus']
+    ds_train = datasets.concatenate_datasets([datasets.load_dataset(ds_name, config, split='train') for config in configs]) # ['problem', 'solution']
+    ds_valid = datasets.concatenate_datasets([datasets.load_dataset(ds_name, config, split='test') for config in configs]) # ['problem', 'solution']
 
-    # tokenize training dataset
+    # tokenize trainind dataset
     print('tokenizing training dataset…')
-    prompts_train = []
-    examples_train = []
+    train_tokens = np.full([len(ds_train), seq_len], pad_id, dtype=np.int32)
+    train_pos = np.zeros([len(ds_train), seq_len], dtype=np.int32)
+    train_loss_mask = np.zeros([len(ds_train), seq_len], dtype=np.bool_)
+    train_attn_mask = np.zeros([len(ds_train), seq_len, seq_len], dtype=np.bool_)
+    seq_idx = 0
+    tok_idx = 0
+    skipped = 0
     for example in ds_train:
+
+        # tokenize example
         prompt = f'Problem: {example["problem"]}\nSolution: '
         solution = f'{example["solution"]}'
-        prompts_train += [prompt]
-        examples_train += [prompt+solution]
-    prompts_tokenized_train = tokenize(prompts_train, vocab, seq_len)
-    examples_tokenized_train = tokenize(examples_train, vocab, seq_len, add_eos=True)
-    within_seq_length = examples_tokenized_train[:, -1] == pad_id
-    prompts_tokenized_train, examples_tokenized_train = prompts_tokenized_train[within_seq_length], examples_tokenized_train[within_seq_length]
-    print(f'fraction within seq. length: {within_seq_length.mean():.1%}')
-    first_solution_token = jnp.argmax(prompts_tokenized_train == pad_id, axis=1) - 1 # [B]
-    last_solution_token = jnp.argmax(examples_tokenized_train == eos_id, axis=1) - 1 # [B]
-    train_loss_mask = (first_solution_token[:, None] <= jnp.arange(seq_len)[None, :]) & (jnp.arange(seq_len)[None, :] <= last_solution_token[:, None])  # [B, T]
-    print(f'{float(train_loss_mask.mean())=:.1%}')
+        prompt_tokenized, solution_tokenized = vocab.EncodeAsIds([prompt, solution])
+        example_tokenized = [bos_id] + prompt_tokenized + solution_tokenized + [eos_id]
+        
+        # if example is too long, skip it
+        if len(example_tokenized) > seq_len:
+            skipped += 1
+            continue
+            
+        # if example doesn't fit in current sequence, start next sequence
+        if tok_idx + len(example_tokenized) > seq_len: 
+            seq_idx += 1
+            tok_idx = 0
+
+        # store tokens
+        train_tokens[seq_idx, tok_idx:tok_idx+len(example_tokenized)] = example_tokenized
+        train_pos[seq_idx, tok_idx:tok_idx+len(example_tokenized)] = np.arange(len(example_tokenized))
+        train_loss_mask[seq_idx, tok_idx+len(prompt_tokenized):tok_idx+len(example_tokenized)-1] = True
+        train_attn_mask[seq_idx, tok_idx:tok_idx+len(example_tokenized), tok_idx:tok_idx+len(example_tokenized)] = True
+        tok_idx += len(example_tokenized)
+    train_attn_mask = np.tril(train_attn_mask)
+    train_tokens = train_tokens[:seq_idx+1]
+    train_pos = train_pos[:seq_idx+1]
+    train_attn_mask = train_attn_mask[:seq_idx+1]
+    train_loss_mask = train_loss_mask[:seq_idx+1]
+    print(f'skipped train. seq.: {skipped / len(ds_train):.1%}')
 
     # tokenize eval dataset
     print('tokenizing eval dataset…')
+    skipped = 0
     prompts_eval = []
     problems_eval = []
     solutions_eval = []
-    for example in ds_valid:
-        prompts_eval += [f'Problem: {example["problem"]}\nSolution: ']
+    tokens_eval = np.full([len(ds_valid), seq_len], pad_id, dtype=np.int32)
+    for i, example in enumerate(ds_valid):
         problems_eval += [example['problem']]
         solutions_eval += [example['solution']]
-    problems_tokenized_eval = tokenize(prompts_eval, vocab, seq_len)
+        prompt = f'Problem: {example["problem"]}\nSolution: '
+        prompt_tokenized = [bos_id] + vocab.EncodeAsIds(prompt) + [eos_id]
+        if len(prompt_tokenized) < seq_len:
+            tokens_eval[i, :len(prompt_tokenized)] = prompt_tokenized
+        else:
+            skipped += 1
+    problems_eval = np.array(problems_eval)
+    solutions_eval = np.array(solutions_eval)
+    print(f'skipped valid. seq.: {skipped / len(ds_valid):.1%}')
     
-    return examples_tokenized_train, train_loss_mask, problems_tokenized_eval, np.array(problems_eval), np.array(solutions_eval)
+    return train_tokens, train_pos, train_attn_mask, train_loss_mask, tokens_eval, problems_eval, solutions_eval
 
 
 def benchmark_model(key, model, tokens, problems_eval, solutions_eval, vocab, batch_size, n_eval_samples=None, temperature=1):

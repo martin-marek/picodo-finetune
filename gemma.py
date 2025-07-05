@@ -111,13 +111,15 @@ class Gemma(nnx.Module):
     def __call__(
         self,
         tokens, # [B, T]
-        kv_cache = {}, # [S]
+        kv_cache = {}, # [B, S]
+        positions = None, # [B, S]
+        attn_mask = None, # [B, S, S]
     ):
         V, D = self.in_embed.embedding.value.shape
         x = self.in_embed(tokens) * jnp.sqrt(D) # [B, T, D]
 
         for i, layer in enumerate(self.layers):
-            x, kv_cache[i] = layer(x, kv_cache.get(i)) # [B, T, D]
+            x, kv_cache[i] = layer(x, kv_cache.get(i), positions, attn_mask) # [B, T, D]
         
         x = self.final_norm(x)
         logits = jnp.dot(x, self.out_embed.embedding.value.T) # [B, T, V]
@@ -160,7 +162,9 @@ class Attention(nnx.Module):
 
     def __call__(self,
         x, # [B, T, D]
-        kv_cache = None # [B, S]
+        kv_cache = None, # [B, S]
+        positions = None, # [B, S]
+        attn_mask = None, # [B, T, S]
     ):
         B, T, D = x.shape
         N, D, H = self.q_einsum.kernel.value.shape
@@ -175,10 +179,13 @@ class Attention(nnx.Module):
         key = self._key_norm(key)
 
         # get token indices
-        if kv_cache is None: # training
-            positions = jnp.broadcast_to(jnp.arange(T)[None, :], [B, S])
-        else: # sampling
-            positions = jnp.full([B, 1], kv_cache['end_idx']) # [B, 1]
+        if positions is None:
+            # training
+            if kv_cache is None:
+                positions = jnp.broadcast_to(jnp.arange(T)[None, :], [B, S])
+            # sampling
+            else:
+                positions = jnp.full([B, 1], kv_cache['end_idx']) # [B, 1]
 
         # apply positional embeddings
         query = apply_rope(query, positions, self.rope_base_frequency, self.rope_scale_factor)
@@ -192,20 +199,23 @@ class Attention(nnx.Module):
             query = query.astype(cache_dtype)
 
         # compute attention mask [B, T, S]
-        if kv_cache is None: # if training, use trinagular mask
-            attn_mask = jnp.tri(T, dtype=jnp.bool_) # [T, S]
-        else: # if sampling, all cached tokens should be visible
-            attn_mask = (jnp.arange(S) <= kv_cache['end_idx'])[None] # [1, S]
+        if attn_mask is None:
+            # if training, use trinagular mask
+            if kv_cache is None:
+                attn_mask = jnp.tri(T, dtype=jnp.bool_)[None] # [B, T, S]
+            # if sampling, all cached tokens are visible
+            else:
+                attn_mask = (jnp.arange(S) <= kv_cache['end_idx'])[None, None] # [B, 1, S]
 
         # add window to attention mask (TODO)
         if self.sliding_window_size is not None:
             offset = 0 if kv_cache is None else kv_cache['end_idx']
             t, s = jnp.mgrid[0:T, 0:S]
             sliding_mask = (t - self.sliding_window_size + 1 + offset) <= s
-            attn_mask &= sliding_mask
+            attn_mask &= sliding_mask[None]
 
         # gqa attention
-        attn_mask = jnp.broadcast_to(attn_mask[None, None, :, :], [B, N, T, S])
+        attn_mask = jnp.broadcast_to(attn_mask[:, None, :, :], [B, N, T, S])
         encoded = jax.nn.dot_product_attention(query, key, value, mask=attn_mask, scale=self.query_pre_attn_scalar)
 
         # output projection
@@ -271,11 +281,16 @@ class Block(nnx.Module):
         self.pre_ffw_norm = nnx.RMSNorm(embed_dim, rngs=rngs)
         self.post_ffw_norm = nnx.RMSNorm(embed_dim, rngs=rngs)
 
-    def __call__(self, x, kv_cache=None):
+    def __call__(self,
+        x, # [B, T, D]
+        kv_cache = None, # [B, S]
+        positions = None, # [B, S]
+        attn_mask = None, # [B, S, S]
+    ):
 
         # attention
         attn_inputs = self.pre_attention_norm(x)
-        attn_output, kv_cache = self.attn(attn_inputs, kv_cache)
+        attn_output, kv_cache = self.attn(attn_inputs, kv_cache, positions, attn_mask)
         attn_output = self.post_attention_norm(attn_output)
         x += attn_output
 
