@@ -100,12 +100,12 @@ def finetune(
                 # shard batch
                 if train_parallelism == 'seq':
                     tokens_batch = jax.device_put(train_tokens[idx], NamedSharding(mesh, P(None, None, 'data'))) # [grad_acc_steps, microbatch_size, seq_len]
-                    pos_batch = jax.device_put(train_tokens[idx], NamedSharding(mesh, P(None, None, 'data'))) # [grad_acc_steps, microbatch_size, seq_len]
+                    pos_batch = jax.device_put(train_pos[idx], NamedSharding(mesh, P(None, None, 'data'))) # [grad_acc_steps, microbatch_size, seq_len]
                     loss_mask_batch = jax.device_put(train_loss_mask[idx], NamedSharding(mesh, P(None, None, 'data'))) # [grad_acc_steps, microbatch_size, seq_len]
                     attn_mask_batch = jax.device_put(train_attn_mask[idx], NamedSharding(mesh, P(None, None, None, None))) # [grad_acc_steps, microbatch_size, seq_len, seq_len]
                 if train_parallelism == 'batch':
                     tokens_batch = jax.device_put(train_tokens[idx], NamedSharding(mesh, P(None, 'data', None))) # [grad_acc_steps, microbatch_size, seq_len]
-                    pos_batch = jax.device_put(train_tokens[idx], NamedSharding(mesh, P(None, 'data', None))) # [grad_acc_steps, microbatch_size, seq_len]
+                    pos_batch = jax.device_put(train_pos[idx], NamedSharding(mesh, P(None, 'data', None))) # [grad_acc_steps, microbatch_size, seq_len]
                     loss_mask_batch = jax.device_put(train_loss_mask[idx], NamedSharding(mesh, P(None, 'data', None))) # [grad_acc_steps, microbatch_size, seq_len]
                     attn_mask_batch = jax.device_put(train_attn_mask[idx], NamedSharding(mesh, P(None, 'data', None, None))) # [grad_acc_steps, microbatch_size, seq_len, seq_len]
                 
