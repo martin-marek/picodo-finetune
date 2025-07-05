@@ -71,7 +71,7 @@ def load_datasets(vocab, seq_len=1024):
         problems_eval += [example['problem']]
         solutions_eval += [example['solution']]
         prompt = f'Problem: {example["problem"]}\nSolution: '
-        prompt_tokenized = [bos_id] + vocab.EncodeAsIds(prompt) + [eos_id]
+        prompt_tokenized = [bos_id] + vocab.EncodeAsIds(prompt)
         if len(prompt_tokenized) < seq_len:
             tokens_eval[i, :len(prompt_tokenized)] = prompt_tokenized
         else:
