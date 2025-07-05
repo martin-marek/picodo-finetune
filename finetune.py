@@ -148,11 +148,13 @@ def train_step(optimizer, tokens, loss_mask, lora=False):
 @partial(nnx.jit, static_argnames=('lora'))
 def train_step_grad_acc(optimizer, tokens, loss_mask, lora=False):
     argnums = nnx.DiffState(0, nnx.LoRAParam) if lora else 0
+    model_graphdef, model_state = nnx.split(optimizer.model)
     loss_mean = 0
-    grad_mean = otu.tree_zeros_like(nnx.state(optimizer.model))
+    grad_mean = otu.tree_zeros_like(model_state)
     def step_fn(i, args):
         grad_mean, loss_mean = args
-        batch_loss, batch_grads = nnx.value_and_grad(loss_fn, argnums=argnums)(optimizer.model, tokens[i], loss_mask[i])
+        model = nnx.merge(model_graphdef, model_state)
+        batch_loss, batch_grads = nnx.value_and_grad(loss_fn, argnums=argnums)(model, tokens[i], loss_mask[i])
         grad_mean = jax.tree.map(lambda m, g: (i*m + g) / (i+1), grad_mean, batch_grads)
         loss_mean = (i*loss_mean + batch_loss) / (i+1)
         return grad_mean, loss_mean
