@@ -152,7 +152,7 @@ def train_step(optimizer, tokens, pos, attn_mask, loss_mask, lora=False):
 
 
 @partial(nnx.jit, static_argnames=('lora'))
-def train_step_grad_acc(optimizer, tokens_batch, tokens, pos, attn_mask, loss_mask, lora=False):
+def train_step_grad_acc(optimizer, tokens, pos, attn_mask, loss_mask, lora=False):
     argnums = nnx.DiffState(0, nnx.LoRAParam) if lora else 0
     model_graphdef, model_state = nnx.split(optimizer.model)
     loss_mean = 0
