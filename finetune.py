@@ -85,7 +85,6 @@ def finetune(
     step = 0
     train_loss = 0
     key = jax.random.PRNGKey(seed)
-    key, key_eval = jax.random.split(key)
     del model
     with mesh:
         # iterate over epochs
@@ -128,6 +127,7 @@ def finetune(
         if (n_epochs > 0) and (jax.process_index() == 0): pbar.close()
         
         # eval
+        key, key_eval = jax.random.split(key)
         eval_metrics = data.benchmark_model(key_eval, optimizer.model, tokens_eval, problems_eval, solutions_eval, vocab, eval_batch_size, n_eval_samples, temperature)
         if logging and (jax.process_index() == 0):
             wandb.log(eval_metrics, step)
