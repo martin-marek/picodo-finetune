@@ -200,7 +200,7 @@ class Attention(nnx.Module):
 
         # compute attention mask [B, T, S]
         if attn_mask is None:
-            # if training, use trinagular mask
+            # if training, use lower triangular mask
             if kv_cache is None:
                 attn_mask = jnp.tri(T, dtype=jnp.bool_)[None] # [B, T, S]
             # if sampling, all cached tokens are visible
