@@ -41,7 +41,7 @@ def train_step(key, optimizer, tokens, pos, attn_mask, loss_mask, lora=False):
             loss = (i*loss + batch_loss) / (i+1)
             grads = jax.tree.map(lambda m, g: (i*m + g) / (i+1), grads, batch_grads)
             return loss, grads
-        loss, grads = jax.lax.fori_loop(0, len(tokens), step_fn, (grads, loss))
+        loss, grads = jax.lax.fori_loop(0, len(tokens), step_fn, (loss, grads))
 
     # optimizer step
     optimizer.update(key_opt, grads)
