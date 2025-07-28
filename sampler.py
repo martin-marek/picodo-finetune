@@ -3,7 +3,6 @@ import jax.numpy as jnp
 import flax
 from flax import nnx
 from tqdm.auto import tqdm
-from functools import partial
 
 
 @flax.struct.dataclass
