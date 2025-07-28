@@ -12,7 +12,9 @@ import optimizer as optimizer_lib
 import gemma, data
 
 
-def loss_fn(model, x, pos, attn_mask, loss_mask): # [B, T]
+@partial(jax.jit, static_argnames=('model_graphdef'))
+def loss_fn(model_state, model_graphdef, x, pos, attn_mask, loss_mask): # [B, T]
+    model = nnx.merge(model_graphdef, model_state)
     B, T = x.shape
     y = jnp.roll(x, -1, axis=1)
     logits, _ = model(x, positions=pos, attn_mask=attn_mask) # [B, T, V]
@@ -20,32 +22,32 @@ def loss_fn(model, x, pos, attn_mask, loss_mask): # [B, T]
     return (losses * loss_mask).sum() / loss_mask.sum()
 
 
-@partial(nnx.jit, static_argnames=('lora'))
-def train_step(key, optimizer, tokens, pos, attn_mask, loss_mask, lora=False):
+@partial(jax.jit, static_argnames=('opt_graphdef', 'model_graphdef', 'lora'))
+def train_step(key, opt_state, opt_graphdef, model_graphdef, tokens, pos, attn_mask, loss_mask, lora=False):
     key, key_opt = jax.random.split(key)
     argnums = nnx.DiffState(0, nnx.LoRAParam) if lora else 0
-    model_graphdef, model_state = nnx.split(optimizer.model)
     
     # compute grads from a single micro-batch
-    if tokens.shape[0] == 1:
-        loss, grads = nnx.value_and_grad(loss_fn, argnums=argnums)(optimizer.model, tokens[0], pos[0], attn_mask[0], loss_mask[0])
+    if tokens.shape[0] == 1: 
+        loss, grads = jax.value_and_grad(loss_fn, argnums=argnums)(opt_state.model, model_graphdef, tokens[0], pos[0], attn_mask[0], loss_mask[0])
 
     # compute grads from multiple micro-batches (using gradient accumulation)
     if tokens.shape[0] >= 2:
         loss = 0
-        grads = otu.tree_zeros_like(model_state)
+        grads = otu.tree_zeros_like(opt_state.model, dtype=jnp.float32)
         def step_fn(i, args):
             loss, grads = args
-            model = nnx.merge(model_graphdef, model_state)
-            batch_loss, batch_grads = nnx.value_and_grad(loss_fn, argnums=argnums)(model, tokens[i], pos[i], attn_mask[i], loss_mask[i])
+            batch_loss, batch_grads = jax.value_and_grad(loss_fn, argnums=argnums)(opt_state.model, model_graphdef, tokens[i], pos[i], attn_mask[i], loss_mask[i])
             loss = (i*loss + batch_loss) / (i+1)
             grads = jax.tree.map(lambda m, g: (i*m + g) / (i+1), grads, batch_grads)
             return loss, grads
         loss, grads = jax.lax.fori_loop(0, len(tokens), step_fn, (loss, grads))
 
     # optimizer step
+    optimizer = nnx.merge(opt_graphdef, opt_state)
     optimizer.update(key_opt, grads)
-    return key, optimizer, loss
+    opt_state = nnx.state(optimizer)
+    return key, opt_state, loss
 
 
 def finetune(
@@ -114,6 +116,8 @@ def finetune(
     if optimizer_name == 'adafactor': tx = optimizer_lib.adafactor(lr, decay_rate=b2)
     wrt = nnx.LoRAParam if use_lora else nnx.Param 
     optimizer = optimizer_lib.Optimizer(model, tx, wrt, stochastic_round)
+    opt_graphdef, opt_state = nnx.split(optimizer)
+    model_graphdef = nnx.graphdef(model)
     
     # print number of parameters
     n_model_params = jax.tree.reduce(lambda x, y: x + jnp.size(y), nnx.state(model), 0)
@@ -149,7 +153,7 @@ def finetune(
                     attn_mask_batch = jax.device_put(train_attn_mask[idx], NamedSharding(mesh, P(None, 'data', None, None))) # [grad_acc_steps, microbatch_size, seq_len, seq_len]
                 
                 # training step
-                key, optimizer, batch_loss = train_step(key, optimizer, tokens_batch, pos_batch, attn_mask_batch, loss_mask_batch, use_lora)
+                key, opt_state, batch_loss = train_step(key, opt_state, opt_graphdef, model_graphdef, tokens_batch, pos_batch, attn_mask_batch, loss_mask_batch, use_lora)
                     
                 # logging
                 train_loss += batch_loss
@@ -164,6 +168,7 @@ def finetune(
         if (n_epochs > 0) and (jax.process_index() == 0): pbar.close()
         
         # eval
+        optimizer = nnx.update(optimizer, opt_state)
         key, key_eval = jax.random.split(key)
         eval_metrics = data.benchmark_model(key_eval, optimizer.model, tokens_eval, problems_eval, solutions_eval, vocab, eval_batch_size, n_eval_samples, temperature)
         if logging and (jax.process_index() == 0):
