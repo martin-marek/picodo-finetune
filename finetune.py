@@ -69,7 +69,7 @@ def finetune(
     logging = False,
     remat = False,
     activ_dtype = 'float32',
-    param_dtype = 'float32',
+    param_dtype = 'bfloat16',
     stochastic_round = False,
     seed = 0,
     **kwargs,
@@ -87,7 +87,7 @@ def finetune(
     print('loading model…')
     n_tensor_devices = jax.device_count() // n_data_devices
     mesh = jax.make_mesh((n_data_devices, n_tensor_devices), ('data', 'model'))
-    model, vocab = gemma.load_pretrained(model_variant, mesh)
+    model, vocab = gemma.load_pretrained(model_variant, mesh, param_dtype)
 
     # optionally use Lora (for all layers except normalization layers)
     use_lora = lora_rank is not None
@@ -118,7 +118,7 @@ def finetune(
     optimizer = optimizer_lib.Optimizer(model, tx, wrt, stochastic_round)
     opt_graphdef, opt_state = nnx.split(optimizer)
     model_graphdef = nnx.graphdef(model)
-    
+
     # print number of parameters
     n_model_params = jax.tree.reduce(lambda x, y: x + jnp.size(y), nnx.state(model), 0)
     n_opt_params = jax.tree.reduce(lambda x, y: x + jnp.size(y), nnx.state(optimizer.opt_state), 0)
@@ -165,10 +165,11 @@ def finetune(
                     train_loss = 0
                 step += 1
                 if jax.process_index() == 0: pbar.update(1)
-        if (n_epochs > 0) and (jax.process_index() == 0): pbar.close()
+        if (n_epochs > 0):
+            optimizer = nnx.update(optimizer, opt_state)
+            if (jax.process_index() == 0): pbar.close()
         
         # eval
-        optimizer = nnx.update(optimizer, opt_state)
         key, key_eval = jax.random.split(key)
         eval_metrics = data.benchmark_model(key_eval, optimizer.model, tokens_eval, problems_eval, solutions_eval, vocab, eval_batch_size, n_eval_samples, temperature)
         if logging and (jax.process_index() == 0):
