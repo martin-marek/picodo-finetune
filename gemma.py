@@ -12,7 +12,6 @@ from rope import apply_rope
 
 @dataclasses.dataclass(frozen=True)
 class GemmaConfig:
-    """Configuration for the gemma transformer."""
     num_layers: int
     embed_dim: int
     hidden_dim: int
@@ -87,13 +86,11 @@ class GemmaConfig:
 
 
 class Gemma(nnx.Module):
-    """Gemma transformer."""
-
     def __init__(self, config: GemmaConfig, rngs: nnx.Rngs):
         self.in_embed = nnx.Embed(config.vocab_size, config.embed_dim, dtype=jnp.float32, rngs=rngs)
         self.out_embed = nnx.Embed(config.vocab_size, config.embed_dim, dtype=jnp.float32, rngs=rngs)
         self.layers = [
-            Block(
+            TransformerBlock(
                 num_heads=config.num_heads,
                 num_kv_heads=config.num_kv_heads,
                 embed_dim=config.embed_dim,
@@ -136,8 +133,6 @@ class Gemma(nnx.Module):
 
 
 class Attention(nnx.Module):
-    """Attention module."""
-
     def __init__(
         self,
         num_heads: int,
@@ -240,8 +235,6 @@ class Attention(nnx.Module):
 
 
 class MLP(nnx.Module):
-    """Feed forward module."""
-
     def __init__(self, embed_dim, hidden_dim, rngs):
         self.gate_proj = nnx.Linear(embed_dim, hidden_dim, use_bias=False, rngs=rngs, kernel_init=jax.nn.initializers.normal())
         self.up_proj = nnx.Linear(embed_dim, hidden_dim, use_bias=False, rngs=rngs, kernel_init=jax.nn.initializers.normal())
@@ -253,9 +246,7 @@ class MLP(nnx.Module):
         return outputs
 
 
-class Block(nnx.Module):
-    """Transformer block."""
-
+class TransformerBlock(nnx.Module):
     def __init__(
         self,
         num_heads: int,
