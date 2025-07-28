@@ -25,11 +25,13 @@ class GemmaConfig:
     local_scale_factor: float = 1.0
     global_scale_factor: float = 1.0
     sliding_window_size: int | None = None
-    attention_pattern: tuple[str] = ('sliding', 'sliding', 'sliding', 'sliding', 'sliding', 'global')
+    attention_pattern: tuple[str] = (*(['sliding']*5), 'global')
+    activ_dtype: str = 'float32'
+    param_dtype: str = 'float32'
 
 
     @classmethod
-    def gemma3_1b(cls):
+    def gemma3_1b(cls, param_dtype='float32'):
         return cls(
             num_layers=26,
             embed_dim=1152,
@@ -40,10 +42,11 @@ class GemmaConfig:
             query_pre_attn_scalar=256**-0.5, # 1/sqrt(head_dim)
             sliding_window_size=512,
             global_scale_factor=1.0,
+            param_dtype=param_dtype,
         )
 
     @classmethod
-    def gemma3_4b(cls):
+    def gemma3_4b(cls, param_dtype='float32'):
         return cls(
             num_layers=34,
             embed_dim=2560,
@@ -54,10 +57,11 @@ class GemmaConfig:
             query_pre_attn_scalar=256**-0.5, # 1/sqrt(head_dim)
             sliding_window_size=1024,
             global_scale_factor=8.0,
+            param_dtype=param_dtype,
         )
 
     @classmethod
-    def gemma3_12b(cls):
+    def gemma3_12b(cls, param_dtype='float32'):
         return cls(
             num_layers=48,
             embed_dim=3840,
@@ -68,10 +72,11 @@ class GemmaConfig:
             query_pre_attn_scalar=256**-0.5, # 1/sqrt(head_dim)
             sliding_window_size=1024,
             global_scale_factor=8.0,
+            param_dtype=param_dtype,
         )
 
     @classmethod
-    def gemma3_27b(cls):
+    def gemma3_27b(cls, param_dtype='float32'):
         return cls(
             num_layers=62,
             embed_dim=5376,
@@ -82,28 +87,31 @@ class GemmaConfig:
             query_pre_attn_scalar=(5376/32)**-0.5, # 1/sqrt(embed_dim / num_heads)
             sliding_window_size=1024,
             global_scale_factor=8.0,
+            param_dtype=param_dtype,
         )
 
 
 class Gemma(nnx.Module):
-    def __init__(self, config: GemmaConfig, rngs: nnx.Rngs):
-        self.in_embed = nnx.Embed(config.vocab_size, config.embed_dim, dtype=jnp.float32, rngs=rngs)
-        self.out_embed = nnx.Embed(config.vocab_size, config.embed_dim, dtype=jnp.float32, rngs=rngs)
+    def __init__(self, c: GemmaConfig, rngs: nnx.Rngs):
+        self.in_embed = nnx.Embed(c.vocab_size, c.embed_dim, dtype=c.activ_dtype, param_dtype=c.param_dtype, rngs=rngs)
+        self.out_embed = nnx.Embed(c.vocab_size, c.embed_dim, dtype=c.activ_dtype, param_dtype=c.param_dtype, rngs=rngs)
         self.layers = [
             TransformerBlock(
-                num_heads=config.num_heads,
-                num_kv_heads=config.num_kv_heads,
-                embed_dim=config.embed_dim,
-                head_dim=config.head_dim,
-                hidden_dim=config.hidden_dim,
-                query_pre_attn_scalar=config.query_pre_attn_scalar,
-                sliding_window_size=config.sliding_window_size if attn_type == 'sliding' else None,
-                rope_base_frequency=config.local_base_frequency if attn_type == 'sliding' else config.global_base_frequency,
-                rope_scale_factor=config.local_scale_factor if attn_type == 'sliding' else config.global_scale_factor,
+                num_heads=c.num_heads,
+                num_kv_heads=c.num_kv_heads,
+                embed_dim=c.embed_dim,
+                head_dim=c.head_dim,
+                hidden_dim=c.hidden_dim,
+                query_pre_attn_scalar=c.query_pre_attn_scalar,
+                sliding_window_size=c.sliding_window_size if attn_type == 'sliding' else None,
+                rope_base_frequency=c.local_base_frequency if attn_type == 'sliding' else c.global_base_frequency,
+                rope_scale_factor=c.local_scale_factor if attn_type == 'sliding' else c.global_scale_factor,
+                activ_dtype = c.activ_dtype,
+                param_dtype = c.param_dtype,
                 rngs=rngs,
-            ) for _, attn_type in zip(range(config.num_layers), cycle(config.attention_pattern))
+            ) for _, attn_type in zip(range(c.num_layers), cycle(c.attention_pattern))
         ]
-        self.final_norm = nnx.RMSNorm(config.embed_dim, rngs=rngs)
+        self.final_norm = nnx.RMSNorm(c.embed_dim, dtype=c.activ_dtype, param_dtype=c.param_dtype, rngs=rngs)
 
     def __call__(
         self,
@@ -140,20 +148,22 @@ class Attention(nnx.Module):
         embed_dim: int,
         head_dim: int,
         query_pre_attn_scalar: float,
-        rngs: nnx.Rngs,
         rope_base_frequency: int,
         rope_scale_factor: float,
         sliding_window_size: int | None = None,
+        activ_dtype = 'float32',
+        param_dtype = 'float32',
+        *, rngs: nnx.Rngs,
     ):
         self.query_pre_attn_scalar = query_pre_attn_scalar
         self.sliding_window_size = sliding_window_size
         self.rope_base_frequency = rope_base_frequency
         self.rope_scale_factor = rope_scale_factor
-        self.attn_vec_einsum = nnx.Einsum(einsum_str='BTNH,NHD->BTD', kernel_shape=(num_heads, head_dim, embed_dim), rngs=rngs)
-        self.q_einsum = nnx.Einsum(einsum_str='BTD,NDH->BTNH', kernel_shape=(num_heads, embed_dim, head_dim), rngs=rngs)
-        self.kv_einsum = nnx.Einsum(einsum_str='BSD,CKDH->CBSKH', kernel_shape=(2, num_kv_heads, embed_dim, head_dim), rngs=rngs)
-        self._query_norm = nnx.RMSNorm(head_dim, rngs=rngs)
-        self._key_norm = nnx.RMSNorm(head_dim, rngs=rngs)
+        self.attn_vec_einsum = nnx.Einsum(einsum_str='BTNH,NHD->BTD', kernel_shape=(num_heads, head_dim, embed_dim), dtype=activ_dtype, param_dtype=param_dtype, rngs=rngs)
+        self.q_einsum = nnx.Einsum(einsum_str='BTD,NDH->BTNH', kernel_shape=(num_heads, embed_dim, head_dim), dtype=activ_dtype, param_dtype=param_dtype, rngs=rngs)
+        self.kv_einsum = nnx.Einsum(einsum_str='BSD,CKDH->CBSKH', kernel_shape=(2, num_kv_heads, embed_dim, head_dim), dtype=activ_dtype, param_dtype=param_dtype, rngs=rngs)
+        self._query_norm = nnx.RMSNorm(head_dim, dtype=activ_dtype, param_dtype=param_dtype, rngs=rngs)
+        self._key_norm = nnx.RMSNorm(head_dim, dtype=activ_dtype, param_dtype=param_dtype, rngs=rngs)
 
     def __call__(self,
         x, # [B, T, D]
@@ -235,10 +245,10 @@ class Attention(nnx.Module):
 
 
 class MLP(nnx.Module):
-    def __init__(self, embed_dim, hidden_dim, rngs):
-        self.gate_proj = nnx.Linear(embed_dim, hidden_dim, use_bias=False, rngs=rngs, kernel_init=jax.nn.initializers.normal())
-        self.up_proj = nnx.Linear(embed_dim, hidden_dim, use_bias=False, rngs=rngs, kernel_init=jax.nn.initializers.normal())
-        self.down_proj = nnx.Linear(hidden_dim, embed_dim, use_bias=False, rngs=rngs, kernel_init=jax.nn.initializers.normal())
+    def __init__(self, embed_dim, hidden_dim, activ_dtype='float32', param_dtype='float32', *, rngs):
+        self.gate_proj = nnx.Linear(embed_dim, hidden_dim, use_bias=False, dtype=activ_dtype, param_dtype=param_dtype, kernel_init=jax.nn.initializers.normal(), rngs=rngs)
+        self.up_proj = nnx.Linear(embed_dim, hidden_dim, use_bias=False, dtype=activ_dtype, param_dtype=param_dtype, kernel_init=jax.nn.initializers.normal(), rngs=rngs)
+        self.down_proj = nnx.Linear(hidden_dim, embed_dim, use_bias=False, dtype=activ_dtype, param_dtype=param_dtype, kernel_init=jax.nn.initializers.normal(), rngs=rngs)
 
     def __call__(self, x):
         activations = nnx.gelu(self.gate_proj(x)) * self.up_proj(x)
@@ -258,19 +268,21 @@ class TransformerBlock(nnx.Module):
         rope_base_frequency: int,
         rope_scale_factor: float,
         sliding_window_size: int | None = None,
+        activ_dtype = 'float32',
+        param_dtype = 'float32',
         *, rngs: nnx.Rngs,
     ):
         self.attn = Attention(
             num_heads=num_heads, num_kv_heads=num_kv_heads,
             embed_dim=embed_dim, head_dim=head_dim, query_pre_attn_scalar=query_pre_attn_scalar,
             rope_base_frequency=rope_base_frequency, rope_scale_factor=rope_scale_factor,
-            sliding_window_size=sliding_window_size, rngs=rngs,
+            sliding_window_size=sliding_window_size, param_dtype=param_dtype, activ_dtype=activ_dtype, rngs=rngs,
         )
-        self.mlp = MLP(embed_dim, hidden_dim, rngs=rngs)
-        self.pre_attention_norm = nnx.RMSNorm(embed_dim, rngs=rngs)
-        self.post_attention_norm = nnx.RMSNorm(embed_dim, rngs=rngs)
-        self.pre_ffw_norm = nnx.RMSNorm(embed_dim, rngs=rngs)
-        self.post_ffw_norm = nnx.RMSNorm(embed_dim, rngs=rngs)
+        self.mlp = MLP(embed_dim, hidden_dim, activ_dtype=activ_dtype, param_dtype=param_dtype, rngs=rngs)
+        self.pre_attention_norm = nnx.RMSNorm(embed_dim, dtype=activ_dtype, param_dtype=param_dtype, rngs=rngs)
+        self.post_attention_norm = nnx.RMSNorm(embed_dim, dtype=activ_dtype, param_dtype=param_dtype, rngs=rngs)
+        self.pre_ffw_norm = nnx.RMSNorm(embed_dim, dtype=activ_dtype, param_dtype=param_dtype, rngs=rngs)
+        self.post_ffw_norm = nnx.RMSNorm(embed_dim, dtype=activ_dtype, param_dtype=param_dtype, rngs=rngs)
 
     def __call__(self,
         x, # [B, T, D]
@@ -294,7 +306,7 @@ class TransformerBlock(nnx.Module):
         return x, kv_cache
 
 
-def load_pretrained(model_variant, mesh):
+def load_pretrained(model_variant, mesh, param_dtype='float32'):
     import kagglehub
     import sentencepiece as spm
     import orbax.checkpoint as ocp
@@ -315,7 +327,7 @@ def load_pretrained(model_variant, mesh):
 
     # load abstract model
     model_architecture = '_'.join(model_variant.split('-')[:2])
-    model_config = getattr(GemmaConfig, model_architecture)()
+    model_config = getattr(GemmaConfig, model_architecture)(param_dtype)
     model = nnx.eval_shape(lambda: Gemma(model_config, rngs=nnx.Rngs(0)))
     model_state = nnx.state(model)
 
@@ -336,7 +348,7 @@ def load_pretrained(model_variant, mesh):
         if 'mlp/gating_einsum' in key: pspec = P(None, 'model', 'data') # [2, F, D]
         # if pspec is None: print(f'WARNING: {key} has no sharding!')
         sharding = None if pspec is None else NamedSharding(mesh, pspec)
-        return jax.ShapeDtypeStruct(v.shape, jnp.float32, sharding=sharding)
+        return jax.ShapeDtypeStruct(v.shape, param_dtype, sharding=sharding)
     checkpoint = jax.tree.map_with_path(add_sharding, checkpoint)
 
     # load checkpoint weights, then flatten the checkpoint keys
