@@ -94,7 +94,8 @@ def finetune(
         dummy_input = jnp.ones([1, 128], dtype=jnp.int32)
         model = qwix.lora.apply_lora_to_model(model, lora_provider, dummy_input)
 
-    # enable gradient chekpointing (currently doesn't work with Lora)
+    # enable gradient chekpointing
+    assert not (remat and lora_rank is not None), 'remat currently not supported with Lora'
     if remat: model.layers = [jax.remat(layer) for layer in model.layers]
 
     # load datasets
