@@ -94,7 +94,6 @@ class GemmaConfig:
 class Gemma(nnx.Module):
     def __init__(self, c: GemmaConfig, rngs: nnx.Rngs):
         self.in_embed = nnx.Embed(c.vocab_size, c.embed_dim, dtype=c.activ_dtype, param_dtype=c.param_dtype, rngs=rngs)
-        self.out_embed = nnx.Embed(c.vocab_size, c.embed_dim, dtype=c.activ_dtype, param_dtype=c.param_dtype, rngs=rngs)
         self.layers = [
             TransformerBlock(
                 num_heads=c.num_heads,
@@ -127,7 +126,7 @@ class Gemma(nnx.Module):
             x, kv_cache[i] = layer(x, kv_cache.get(i), positions, attn_mask) # [B, T, D]
         
         x = self.final_norm(x)
-        logits = jnp.dot(x, self.out_embed.embedding.value.T) # [B, T, V]
+        logits = jnp.dot(x, self.in_embed.embedding.value.T) # [B, T, V]
 
         return logits, kv_cache
 
@@ -233,9 +232,9 @@ class Attention(nnx.Module):
         return attn_output, kv_cache
 
     def init_kv_cache(self, batch_size, max_seq_len):
-        mesh = self.kv_einsum.kernel.value.sharding.mesh
-        _, num_kv_heads, _, head_dim = self.kv_einsum.kernel.value.shape
-        sharding = NamedSharding(mesh, P('data', None, 'model', None))
+        w = self.kv_einsum.kernel.value
+        _, num_kv_heads, _, head_dim = w.shape
+        sharding = NamedSharding(w.sharding.mesh, P('data', None, 'model', None)) if hasattr(w, 'sharding') else None
         kv_cache = {
             'k': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=jnp.bfloat16, device=sharding),
             'v': jnp.zeros((batch_size, max_seq_len, num_kv_heads, head_dim), dtype=jnp.bfloat16, device=sharding),
@@ -306,7 +305,7 @@ class TransformerBlock(nnx.Module):
         return x, kv_cache
 
 
-def load_pretrained(model_variant, mesh, param_dtype='float32'):
+def load_pretrained(model_variant, mesh=None, param_dtype='float32'):
     import kagglehub
     import sentencepiece as spm
     import orbax.checkpoint as ocp
@@ -347,7 +346,7 @@ def load_pretrained(model_variant, mesh, param_dtype='float32'):
         if 'mlp/linear' in key: pspec = P('model', 'data') # [F, D]
         if 'mlp/gating_einsum' in key: pspec = P(None, 'model', 'data') # [2, F, D]
         # if pspec is None: print(f'WARNING: {key} has no sharding!')
-        sharding = None if pspec is None else NamedSharding(mesh, pspec)
+        sharding = None if (pspec is None or mesh is None) else NamedSharding(mesh, pspec)
         return jax.ShapeDtypeStruct(v.shape, param_dtype, sharding=sharding)
     checkpoint = jax.tree.map_with_path(add_sharding, checkpoint)
 
@@ -364,7 +363,6 @@ def load_pretrained(model_variant, mesh, param_dtype='float32'):
         key = key.replace('layers/', 'layer_')
         key = key.replace('kernel', 'w')
         key = key.replace('in_embed/embedding', 'embedder/input_embedding')
-        key = key.replace('out_embed/embedding', 'embedder/input_embedding')
         key = key.replace('mlp/down_proj', 'mlp/linear')
         if '/scale' in key:
             val_fn = lambda x: x+1
@@ -376,7 +374,6 @@ def load_pretrained(model_variant, mesh, param_dtype='float32'):
             val_fn = lambda x: x[1].T
         return val_fn(checkpoint[key])
     model_state = jax.tree.map_with_path(get_weights, model_state)
-    model_state['out_embed']['embedding'].value = jax.device_put(model_state['out_embed']['embedding'].value, NamedSharding(mesh, P('model', 'data'))) # [V, D]
     nnx.update(model, model_state)
 
     return model, vocab

@@ -15,14 +15,13 @@ import gemma, data
 @partial(jax.jit, static_argnames=('model_graphdef'))
 def loss_fn(model_state, model_graphdef, x, pos, attn_mask, loss_mask): # [B, T]
     model = nnx.merge(model_graphdef, model_state)
-    B, T = x.shape
     y = jnp.roll(x, -1, axis=1)
     logits, _ = model(x, positions=pos, attn_mask=attn_mask) # [B, T, V]
     losses = optax.softmax_cross_entropy_with_integer_labels(logits, y) # [B, T]
     return (losses * loss_mask).sum() / loss_mask.sum()
 
 
-@partial(jax.jit, static_argnames=('opt_graphdef', 'model_graphdef', 'lora'))
+@partial(jax.jit, static_argnames=('opt_graphdef', 'model_graphdef', 'lora'), donate_argnames=('opt_state'))
 def train_step(key, opt_state, opt_graphdef, model_graphdef, tokens, pos, attn_mask, loss_mask, lora=False):
     key, key_opt = jax.random.split(key)
     argnums = nnx.DiffState(0, nnx.LoRAParam) if lora else 0
