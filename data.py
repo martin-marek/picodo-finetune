@@ -1,4 +1,3 @@
-import math
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -89,9 +88,8 @@ def benchmark_model(key, model, tokens, problems_eval, solutions_eval, vocab, ba
     key_decoding, key_questions = jax.random.split(key)
     mesh = model.in_embed.embedding.value.sharding.mesh
     if n_eval_samples is None: n_eval_samples = len(tokens)
-    n_batches = int(math.ceil(n_eval_samples / batch_size))
-    n_eval_samples = n_batches * batch_size
-    sample_idxs = jax.random.choice(key_questions, max(n_eval_samples, len(tokens)), shape=[n_batches, batch_size], replace=False)
+    n_batches = n_eval_samples // batch_size
+    sample_idxs = jax.random.choice(key_questions, len(tokens), shape=[n_batches, batch_size], replace=False)
     lengths_list = []
     correct_list = []
     finished_list = []
