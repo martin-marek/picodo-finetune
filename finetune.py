@@ -110,6 +110,7 @@ def finetune(
     warmup_steps = int(warmup_frac * n_optimizer_steps)
     if lr_schedule == 'const': lr = peak_lr
     if lr_schedule == 'cosine': lr = optax.schedules.warmup_cosine_decay_schedule(0, peak_lr, warmup_steps, max(1, n_optimizer_steps))
+    if optimizer_name == 'sgd': tx = optax.sgd(lr)
     if optimizer_name == 'adam': tx = optax.adam(lr, 0.9, b2)
     if optimizer_name == 'adafactor': tx = optimizer_lib.adafactor(lr, decay_rate=b2)
     wrt = nnx.LoRAParam if use_lora else nnx.Param 
