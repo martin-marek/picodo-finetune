@@ -59,7 +59,7 @@ def finetune(
     batch_size = 1,
     microbatch_size = 1,
     n_eval_samples = None,
-    eval_batch_size = 128,
+    eval_batch_size = 64,
     n_data_devices = 1,
     train_parallelism = 'seq', # ['seq', 'batch']
     param_dtype = 'float32',
