@@ -84,19 +84,17 @@ def finetune(
     print('loading model…')
     n_tensor_devices = jax.device_count() // n_data_devices
     mesh = jax.make_mesh((n_data_devices, n_tensor_devices), ('data', 'model'))
-    model, vocab = gemma.load_pretrained(model_variant, mesh, param_dtype)
+    model, vocab = gemma.load_pretrained(model_variant, mesh, param_dtype, remat)
 
-    # optionally use Lora (for all layers except normalization layers)
+    # optionally use Lora
+    assert not (remat and lora_rank is not None), 'remat currently not supported with Lora'
     use_lora = lora_rank is not None
     if use_lora:
-        import qwix # only needed for Lora
+        import qwix # only needed for LoRA
+        # apply LoRA to all layers except normalization layers
         lora_provider = qwix.lora.LoraProvider(module_path='^((?!scale).)*$', rank=lora_rank, alpha=2)
         dummy_input = jnp.ones([1, 128], dtype=jnp.int32)
         model = qwix.lora.apply_lora_to_model(model, lora_provider, dummy_input)
-
-    # enable gradient chekpointing
-    assert not (remat and lora_rank is not None), 'remat currently not supported with Lora'
-    if remat: model.layers = [jax.remat(layer) for layer in model.layers]
 
     # load datasets
     train_tokens, train_pos, train_attn_mask, train_loss_mask, tokens_eval, problems_eval, solutions_eval = data.load_datasets(vocab)

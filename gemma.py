@@ -28,10 +28,11 @@ class GemmaConfig:
     attention_pattern: tuple[str] = (*(['sliding']*5), 'global')
     activ_dtype: str = 'float32'
     param_dtype: str = 'float32'
+    remat: bool = False
 
 
     @classmethod
-    def gemma3_1b(cls, param_dtype='float32'):
+    def gemma3_1b(cls, param_dtype='float32', remat=False):
         return cls(
             num_layers=26,
             embed_dim=1152,
@@ -43,10 +44,11 @@ class GemmaConfig:
             sliding_window_size=512,
             global_scale_factor=1.0,
             param_dtype=param_dtype,
+            remat=remat,
         )
 
     @classmethod
-    def gemma3_4b(cls, param_dtype='float32'):
+    def gemma3_4b(cls, param_dtype='float32', remat=False):
         return cls(
             num_layers=34,
             embed_dim=2560,
@@ -58,10 +60,11 @@ class GemmaConfig:
             sliding_window_size=1024,
             global_scale_factor=8.0,
             param_dtype=param_dtype,
+            remat=remat,
         )
 
     @classmethod
-    def gemma3_12b(cls, param_dtype='float32'):
+    def gemma3_12b(cls, param_dtype='float32', remat=False):
         return cls(
             num_layers=48,
             embed_dim=3840,
@@ -73,10 +76,11 @@ class GemmaConfig:
             sliding_window_size=1024,
             global_scale_factor=8.0,
             param_dtype=param_dtype,
+            remat=remat,
         )
 
     @classmethod
-    def gemma3_27b(cls, param_dtype='float32'):
+    def gemma3_27b(cls, param_dtype='float32', remat=False):
         return cls(
             num_layers=62,
             embed_dim=5376,
@@ -88,6 +92,7 @@ class GemmaConfig:
             sliding_window_size=1024,
             global_scale_factor=8.0,
             param_dtype=param_dtype,
+            remat=remat,
         )
 
 
@@ -111,6 +116,7 @@ class Gemma(nnx.Module):
             ) for _, attn_type in zip(range(c.num_layers), cycle(c.attention_pattern))
         ]
         self.final_norm = nnx.RMSNorm(c.embed_dim, dtype=c.activ_dtype, param_dtype=c.param_dtype, rngs=rngs)
+        self.remat = c.remat
 
     def __call__(
         self,
@@ -123,7 +129,8 @@ class Gemma(nnx.Module):
         x = self.in_embed(tokens) * jnp.sqrt(D) # [B, T, D]
 
         for i, layer in enumerate(self.layers):
-            x, kv_cache[i] = layer(x, kv_cache.get(i), positions, attn_mask) # [B, T, D]
+            layer_fn = jax.remat(layer) if self.remat else layer
+            x, kv_cache[i] = layer_fn(x, kv_cache.get(i), positions, attn_mask) # [B, T, D]
         
         x = self.final_norm(x)
         logits = jnp.dot(x, self.in_embed.embedding.value.T) # [B, T, V]
@@ -305,7 +312,7 @@ class TransformerBlock(nnx.Module):
         return x, kv_cache
 
 
-def load_pretrained(model_variant, mesh=None, param_dtype='float32'):
+def load_pretrained(model_variant, mesh=None, param_dtype='float32', remat=False):
     import kagglehub
     import sentencepiece as spm
     import orbax.checkpoint as ocp
@@ -326,7 +333,7 @@ def load_pretrained(model_variant, mesh=None, param_dtype='float32'):
 
     # load abstract model
     model_architecture = '_'.join(model_variant.split('-')[:2])
-    model_config = getattr(GemmaConfig, model_architecture)(param_dtype)
+    model_config = getattr(GemmaConfig, model_architecture)(param_dtype, remat)
     model = nnx.eval_shape(lambda: Gemma(model_config, rngs=nnx.Rngs(0)))
     model_state = nnx.state(model)
 
