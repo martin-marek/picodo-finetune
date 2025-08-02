@@ -50,6 +50,7 @@ def train_step(key, opt_state, opt_graphdef, tokens, pos, attn_mask, loss_mask, 
 def finetune(
     model_variant = 'gemma3-1b', # ['1b', '4b', '12b', '27b']
     lora_rank = None,
+    temperature = 1,
     optimizer_name = 'adafactor', # ['adam', 'adafactor']
     peak_lr = 1e-6,
     lr_schedule = 'const',
@@ -57,17 +58,16 @@ def finetune(
     n_epochs = 1,
     batch_size = 1,
     microbatch_size = 1,
-    n_eval_samples = 128,
+    n_eval_samples = None,
     eval_batch_size = 128,
     n_data_devices = 1,
     train_parallelism = 'seq', # ['seq', 'batch']
-    temperature = 1,
-    log_every_steps = 100,
-    logging = False,
-    remat = False,
-    activ_dtype = 'float32',
-    param_dtype = 'bfloat16',
+    param_dtype = 'float32',
     stochastic_round = False,
+    remat = False,
+    log_every_steps = 100,
+    wandb_mode = 'disabled',
+    run_name = None,
     seed = 0,
     **kwargs,
 ):
@@ -78,7 +78,7 @@ def finetune(
     train_config = locals()
     if jax.process_index() == 0:
         print(f'{train_config=}')
-        if logging: wandb.init(project='picodo-finetune', config=train_config)
+        wandb.init(project='picodo-finetune', config=train_config, mode=wandb_mode, name=run_name)
 
     # load model
     print('loading model…')
@@ -157,7 +157,7 @@ def finetune(
                     if (step+1) % log_every_steps == 0:
                         avg_loss = train_loss / log_every_steps
                         if jax.process_index() == 0:
-                            if logging: wandb.log({'train_loss': float(avg_loss)}, step)
+                            wandb.log({'train_loss': float(avg_loss)}, step)
                             pbar.set_postfix_str(f'loss={float(avg_loss):.2f}')
                         train_loss = 0
                     step += 1
@@ -170,7 +170,7 @@ def finetune(
         # eval
         key, key_eval = jax.random.split(key)
         eval_metrics = data.benchmark_model(key_eval, optimizer.model, tokens_eval, problems_eval, solutions_eval, vocab, eval_batch_size, n_eval_samples, temperature)
-        if logging and (jax.process_index() == 0):
+        if jax.process_index() == 0:
             wandb.log(eval_metrics, step)
             wandb.finish()
 
