@@ -92,9 +92,9 @@ def finetune(
     if use_lora:
         import qwix # only needed for LoRA
         # apply LoRA to all layers except normalization layers
-        lora_provider = qwix.lora.LoraProvider(module_path='^((?!scale).)*$', rank=lora_rank, alpha=2)
+        lora_provider = qwix.LoraProvider(module_path='^((?!scale).)*$', rank=lora_rank, alpha=2)
         dummy_input = jnp.ones([1, 128], dtype=jnp.int32)
-        model = qwix.lora.apply_lora_to_model(model, lora_provider, dummy_input)
+        model = qwix.apply_lora_to_model(model, lora_provider, dummy_input)
 
     # load datasets
     train_tokens, train_pos, train_attn_mask, train_loss_mask, tokens_eval, problems_eval, solutions_eval = data.load_datasets(vocab)
