@@ -1,7 +1,9 @@
+import os
 import jax
 import jax.numpy as jnp
 import numpy as np
 import datasets
+from contextlib import redirect_stderr
 from jax.sharding import NamedSharding, PartitionSpec as P
 from math_verify import parse, verify
 from sampler import sample
@@ -14,10 +16,11 @@ def load_datasets(vocab, seq_len=1024):
 
     # load MATH dataset
     print('loading datasets…')
-    ds_name = 'EleutherAI/hendrycks_math'
-    configs = datasets.get_dataset_config_names(ds_name) # ['algebra', 'counting_and_probability', 'geometry', 'intermediate_algebra', 'number_theory', 'prealgebra', 'precalculus']
-    ds_train = datasets.concatenate_datasets([datasets.load_dataset(ds_name, config, split='train') for config in configs]) # ['problem', 'solution']
-    ds_valid = datasets.concatenate_datasets([datasets.load_dataset(ds_name, config, split='test') for config in configs]) # ['problem', 'solution']
+    with open(os.devnull, 'w') as f, redirect_stderr(f): # supress progress bar
+        ds_name = 'EleutherAI/hendrycks_math'
+        configs = datasets.get_dataset_config_names(ds_name) # ['algebra', 'counting_and_probability', 'geometry', 'intermediate_algebra', 'number_theory', 'prealgebra', 'precalculus']
+        ds_train = datasets.concatenate_datasets([datasets.load_dataset(ds_name, config, split='train') for config in configs]) # ['problem', 'solution']
+        ds_valid = datasets.concatenate_datasets([datasets.load_dataset(ds_name, config, split='test') for config in configs]) # ['problem', 'solution']
 
     # tokenize trainind dataset
     print('tokenizing training dataset…')
