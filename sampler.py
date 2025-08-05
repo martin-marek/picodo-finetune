@@ -28,10 +28,8 @@ def _sample_top_p(key, probs, p=0.95):
     return next_token
 
 
-def _sample_step(state, model, pbar, pad_id, eos_id, temperature=1):
-
-    # we pass model_state as non-static arg, to avoid compiling it
-    # model = nnx.merge(model_graphdef, model_state)
+def _sample_step(state, model_graphdef, model_state, pbar, pad_id, eos_id, temperature=1):
+    model = nnx.merge(model_graphdef, model_state)
 
     # sample next token
     key, key_sampling = jax.random.split(state.key)
@@ -69,7 +67,7 @@ def sample(key, model, tokens, temperature=1, pad_id=0, eos_id=1):
 
     # sample next token inside a while loop
     pbar = tqdm(total=T, desc='Sampling') if (jax.process_index() == 0) else None
-    step_fn = lambda state: _sample_step(state, model, pbar, pad_id, eos_id, temperature)
+    step_fn = lambda state: _sample_step(state, *nnx.split(model), pbar, pad_id, eos_id, temperature)
     cond_fn = lambda state: (state.step < T) & jnp.any(~state.done)
     state = jax.lax.while_loop(cond_fn, step_fn, state)
     jax.effects_barrier()
