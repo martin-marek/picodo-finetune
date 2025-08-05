@@ -3,7 +3,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import datasets
-from tqdm.auto import tqdm
 from contextlib import redirect_stderr
 from jax.sharding import NamedSharding, PartitionSpec as P
 from math_verify import parse, verify
@@ -86,7 +85,7 @@ def load_datasets(vocab, seq_len=1024):
     return train_tokens, train_pos, train_attn_mask, train_loss_mask, tokens_eval, problems_eval, solutions_eval
 
 
-def benchmark_model(key, model, tokens, problems_eval, solutions_eval, vocab, batch_size, n_eval_samples=None, temperature=1):
+def benchmark_model(key, model, tokens, problems_eval, solutions_eval, vocab, batch_size, n_eval_samples=None, temperature=1, print_output=True):
     pad_id = vocab.pad_id()
     eos_id = vocab.eos_id()
     key_decoding, key_questions = jax.random.split(key)
@@ -97,7 +96,6 @@ def benchmark_model(key, model, tokens, problems_eval, solutions_eval, vocab, ba
     lengths_list = []
     correct_list = []
     finished_list = []
-    if (jax.process_index() == 0): pbar = tqdm(sample_idxs, desc='Sampling')
     for batch_idx in sample_idxs:
         tokens_batch = jax.device_put(tokens[batch_idx], NamedSharding(mesh, P('data', None)))
         completions_tokens = sample(key_decoding, model, tokens_batch, temperature)
@@ -112,7 +110,8 @@ def benchmark_model(key, model, tokens, problems_eval, solutions_eval, vocab, ba
                 lengths_list += [len(completion_tokens)]
                 finished_list += [finished]
                 correct_list += [correct]
-                print('------------')
-                print(f'PROMPT:\n{problem}\nCOMPLETION:\n{completion_text}\nPARSED: {parsed}\nGOLD: {gold}\nCORRECT: {correct}')
+                if print_output:
+                    print('------------')
+                    print(f'PROMPT:\n{problem}\nCOMPLETION:\n{completion_text}\nPARSED: {parsed}\nGOLD: {gold}\nCORRECT: {correct}')
 
     return dict(length=np.mean(lengths_list), finished=np.mean(finished_list), accuracy=np.mean(correct_list))
