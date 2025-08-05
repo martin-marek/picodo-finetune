@@ -1,7 +1,9 @@
 """based on https://github.com/google/flax/tree/main/examples/gemma"""
 
+import os
 import dataclasses
 from itertools import cycle
+from contextlib import redirect_stderr
 
 import jax
 import jax.numpy as jnp
@@ -323,7 +325,8 @@ def load_pretrained(model_variant, mesh=None, param_dtype='float32', remat=False
     print_tree = lambda tree: jax.tree.map_with_path(lambda path, v: print(f'{flatten_path(path)}: {v.shape}'), tree)
 
     # download weights
-    weights_dir = kagglehub.model_download(f'google/gemma-3/flax/{model_variant}')
+    with open(os.devnull, 'w') as f, redirect_stderr(f): # supress progress bar
+        weights_dir = kagglehub.model_download(f'google/gemma-3/flax/{model_variant}')
     ckpt_path = f'{weights_dir}/{model_variant}'
     vocab_path = f'{weights_dir}/tokenizer.model'
 
