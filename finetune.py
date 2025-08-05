@@ -66,6 +66,7 @@ def finetune(
     stochastic_round = False,
     remat = False,
     log_every_steps = 100,
+    print_output=False,
     wandb_mode = 'disabled',
     run_name = None,
     seed = 0,
@@ -101,8 +102,8 @@ def finetune(
         for path, module in model.iter_modules():
             if hasattr(module, 'kernel_lora_a'):
                 module.kernel_lora_a.value = module.kernel_lora_a.value.astype(jnp.float32)
-                module.kernel_lora_b.value = module.kernel_lora_b.value.astype(jnp.float32)
-        
+                module.kernel_lora_b.value = module.kernel_lora_b.value.astype(jnp.float32)   
+    
     # load datasets
     print('loading data...')
     train_tokens, train_pos, train_attn_mask, train_loss_mask, tokens_eval, problems_eval, solutions_eval = data.load_datasets(vocab)
@@ -171,13 +172,14 @@ def finetune(
                     step += 1
                     if jax.process_index() == 0: pbar.update(1)
 
-            # after training is finished, update optimizer's state
+            # after training is finished, update optimizer
             nnx.update(optimizer, opt_state)
+            del optimizer.opt_state
             if (jax.process_index() == 0): pbar.close()
             
         # eval
         key, key_eval = jax.random.split(key)
-        eval_metrics = data.benchmark_model(key_eval, optimizer.model, tokens_eval, problems_eval, solutions_eval, vocab, eval_batch_size, n_eval_samples, temperature)
+        eval_metrics = data.benchmark_model(key_eval, optimizer.model, tokens_eval, problems_eval, solutions_eval, vocab, eval_batch_size, n_eval_samples, temperature, print_output)
         if jax.process_index() == 0:
             wandb.log(eval_metrics, step)
             wandb.finish()
