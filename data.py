@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import datasets
+from tqdm.auto import tqdm
 from contextlib import redirect_stderr
 from jax.sharding import NamedSharding, PartitionSpec as P
 from math_verify import parse, verify
@@ -96,6 +97,7 @@ def benchmark_model(key, model, tokens, problems_eval, solutions_eval, vocab, ba
     lengths_list = []
     correct_list = []
     finished_list = []
+    if (jax.process_index() == 0): pbar = tqdm(sample_idxs, desc='Sampling')
     for batch_idx in sample_idxs:
         tokens_batch = jax.device_put(tokens[batch_idx], NamedSharding(mesh, P('data', None)))
         completions_tokens = sample(key_decoding, model, tokens_batch, temperature)
