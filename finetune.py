@@ -62,7 +62,7 @@ def finetune(
     eval_batch_size = 64,
     n_data_devices = 1,
     train_parallelism = 'seq', # ['seq', 'batch']
-    param_dtype = 'float32',
+    param_dtype = 'bfloat16',
     stochastic_round = False,
     remat = False,
     log_every_steps = 100,
@@ -90,12 +90,19 @@ def finetune(
     assert not (remat and lora_rank is not None), 'remat currently not supported with Lora'
     use_lora = lora_rank is not None
     if use_lora:
-        import qwix # only needed for LoRA
+        import qwix
+        
         # apply LoRA to all layers except normalization layers
         lora_provider = qwix.LoraProvider(module_path='^((?!scale).)*$', rank=lora_rank, alpha=2)
         dummy_input = jnp.ones([1, 128], dtype=jnp.int32)
         model = qwix.apply_lora_to_model(model, lora_provider, dummy_input)
 
+        # convert all LoRA params to float32
+        for path, module in model.iter_modules():
+            if hasattr(module, 'kernel_lora_a'):
+                module.kernel_lora_a.value = module.kernel_lora_a.value.astype(jnp.float32)
+                module.kernel_lora_b.value = module.kernel_lora_b.value.astype(jnp.float32)
+        
     # load datasets
     train_tokens, train_pos, train_attn_mask, train_loss_mask, tokens_eval, problems_eval, solutions_eval = data.load_datasets(vocab)
     
