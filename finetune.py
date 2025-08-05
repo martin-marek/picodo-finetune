@@ -104,6 +104,7 @@ def finetune(
                 module.kernel_lora_b.value = module.kernel_lora_b.value.astype(jnp.float32)
         
     # load datasets
+    print('loading data...')
     train_tokens, train_pos, train_attn_mask, train_loss_mask, tokens_eval, problems_eval, solutions_eval = data.load_datasets(vocab)
     
     # optimizer
