@@ -65,7 +65,7 @@ def finetune(
     param_dtype = 'bfloat16',
     stochastic_round = False,
     remat = False,
-    log_every_steps = 100,
+    log_every_samples = 100,
     print_output=False,
     wandb_mode = 'disabled',
     run_name = None,
@@ -163,6 +163,7 @@ def finetune(
                         
                     # logging
                     train_loss += batch_loss
+                    log_every_steps = log_every_samples // batch_size
                     if (step+1) % log_every_steps == 0:
                         avg_loss = train_loss / log_every_steps
                         if jax.process_index() == 0:
